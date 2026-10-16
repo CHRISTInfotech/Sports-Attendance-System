@@ -139,6 +139,11 @@ class Membership(TimeStampedModel):
         return f"{self.user.get_full_name() or self.user.username} - {self.team}"
 
 
+class ActiveRecordManager(models.Manager):
+    def get_queryset(self):
+        return super().get_queryset().filter(is_deleted=False)
+
+
 class Session(TimeStampedModel):
     class Status(models.TextChoices):
         SCHEDULED = "SCHEDULED", "Scheduled"
@@ -166,6 +171,18 @@ class Session(TimeStampedModel):
     attendance_started_at = models.DateTimeField(null=True, blank=True)
     attendance_lock_expires_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deleted_sessions",
+    )
+
+    objects = ActiveRecordManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["-start_at"]
@@ -271,6 +288,18 @@ class Meeting(TimeStampedModel):
     scheduled_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, related_name="meetings_scheduled")
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
     ending_note = models.TextField(blank=True)
+    is_deleted = models.BooleanField(default=False)
+    deleted_at = models.DateTimeField(null=True, blank=True)
+    deleted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deleted_meetings",
+    )
+
+    objects = ActiveRecordManager()
+    all_objects = models.Manager()
 
     class Meta:
         ordering = ["-meeting_date", "-start_time"]

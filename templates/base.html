@@ -287,6 +287,10 @@
 
       let currentPage = 1;
       const pageSizeSelect = tools.querySelector('.table-page-size');
+      const defaultPageSize = table.dataset.defaultPageSize;
+      if (defaultPageSize && pageSizeSelect.querySelector(`option[value="${defaultPageSize}"]`)) {
+        pageSizeSelect.value = defaultPageSize;
+      }
       const paginationList = pagination.querySelector('.pagination');
       const paginationSummary = pagination.querySelector('.table-pagination-summary');
 
@@ -379,7 +383,7 @@
       profileImageInput.addEventListener('change', event => {
         const file = event.target.files?.[0];
         if (!file || !file.type.startsWith('image/')) return;
-        const hero = event.target.closest('.profile-hero');
+        const hero = event.target.closest('.profile-hero') || document.querySelector('.profile-hero');
         const photoWrap = hero?.querySelector('.profile-photo-wrap');
         if (!photoWrap) return;
         const currentPreview = photoWrap.querySelector('img, span');

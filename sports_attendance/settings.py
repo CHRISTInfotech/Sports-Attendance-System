@@ -153,7 +153,7 @@ if DEBUG:
 	STATICFILES_DIRS = [BASE_DIR / 'static']
 else:
 	STATIC_ROOT = BASE_DIR / 'static'
-MEDIA_URL = 'media/'
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
 SITE_ID = 1

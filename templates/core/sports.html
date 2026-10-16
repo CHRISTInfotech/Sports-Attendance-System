@@ -28,7 +28,7 @@
     <span class="badge rounded-pill text-bg-light">{{ sport_count }} Sports</span>
   </div>
   <div class="table-responsive">
-    <table class="table align-middle data-table">
+    <table class="table align-middle data-table" data-default-page-size="100">
       <thead><tr><th>Sport</th><th>Teams</th><th>Players</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for sport in sports %}

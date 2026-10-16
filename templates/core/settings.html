@@ -13,6 +13,20 @@
       <strong>{{ inactive_users_count }}</strong>
     </a>
   {% endif %}
+  {% if can_view_deleted_sessions %}
+    <a class="settings-card" href="{% url 'deleted_sessions' %}">
+      <span class="stat-icon"><i class="bi bi-calendar-x"></i></span>
+      <span class="settings-card-title">Deleted Sessions</span>
+      <strong>{{ deleted_sessions_count }}</strong>
+    </a>
+  {% endif %}
+  {% if is_settings_admin %}
+    <a class="settings-card" href="{% url 'deleted_meetings' %}">
+      <span class="stat-icon"><i class="bi bi-calendar2-x"></i></span>
+      <span class="settings-card-title">Deleted Meetings</span>
+      <strong>{{ deleted_meetings_count }}</strong>
+    </a>
+  {% endif %}
   <a class="settings-card" href="{% url 'notifications' %}">
     <span class="stat-icon"><i class="bi bi-bell"></i></span>
     <span class="settings-card-title">All Notifications</span>

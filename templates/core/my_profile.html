@@ -27,7 +27,6 @@
     <div>
       <p class="eyebrow mb-1">Profile</p>
       <h2>Hii, {{ user.get_full_name|default:user.email }}</h2>
-      <input class="visually-hidden" id="id_profile_image" type="file" name="profile_image" accept="image/*" form="profileForm">
       {% if form.profile_image.errors %}<div class="text-danger small mt-2">{{ form.profile_image.errors|striptags }}</div>{% endif %}
     </div>
   </div>
@@ -48,6 +47,7 @@
 
   <form id="profileForm" method="post" enctype="multipart/form-data" class="row g-3">
     {% csrf_token %}
+    <input class="visually-hidden" id="id_profile_image" type="file" name="profile_image" accept="image/*">
     <div class="col-md-6">{{ form.first_name.label_tag }}{{ form.first_name }}</div>
     <div class="col-md-6">{{ form.last_name.label_tag }}{{ form.last_name }}</div>
     <div class="col-md-6">{{ form.email.label_tag }}{{ form.email }}</div>

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Deleted Meetings{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Settings</p>
+    <h1>Deleted Meetings</h1>
+    <p class="text-muted mb-0">View cancelled meetings removed from the active meeting list.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="section-title"><h2>Deleted Meeting List</h2><span class="small text-muted">Latest deleted first</span></div>
+  <div class="table-responsive">
+    <table class="table align-middle data-table">
+      <thead><tr><th>Meeting</th><th>Date</th><th>Time</th><th>Venue</th><th>Deleted</th><th class="text-end">Actions</th></tr></thead>
+      <tbody>
+        {% for meeting in meetings %}
+          <tr>
+            <td><strong>{{ meeting.title }}</strong></td>
+            <td>{{ meeting.meeting_date|date:"d M Y" }}</td>
+            <td>{{ meeting.start_time|time:"h:i A" }} - {{ meeting.end_time|time:"h:i A" }}</td>
+            <td>{{ meeting.venue }}</td>
+            <td>{{ meeting.deleted_at|date:"d M Y, h:i A" }}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#deletedMeetingViewModal"
+                data-title="{{ meeting.title }}" data-date="{{ meeting.meeting_date|date:'d/m/Y' }}"
+                data-time="{{ meeting.start_time|time:'h:i A' }} - {{ meeting.end_time|time:'h:i A' }}"
+                data-venue="{{ meeting.venue }}" data-agenda="{{ meeting.agenda|default:'-' }}"
+                data-teams="{{ meeting.team_names_full }}" data-scheduled-by="{{ meeting.scheduled_by_name }}"
+                data-deleted-by="{{ meeting.deleted_by_name }}" data-deleted-at="{{ meeting.deleted_at|date:'d M Y, h:i A' }}"
+                data-ending-note="{{ meeting.ending_note|default:'-' }}"><i class="bi bi-eye"></i> View</button>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty-state">No deleted meetings.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="modal fade" id="deletedMeetingViewModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Deleted Meeting Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body detail-list">
+        <div><span>Title</span><strong data-field="title"></strong></div>
+        <div><span>Date</span><strong data-field="date"></strong></div>
+        <div><span>Time</span><strong data-field="time"></strong></div>
+        <div><span>Venue</span><strong data-field="venue"></strong></div>
+        <div><span>Teams</span><strong data-field="teams"></strong></div>
+        <div><span>Agenda</span><strong data-field="agenda"></strong></div>
+        <div><span>Cancellation Note</span><strong data-field="ending-note"></strong></div>
+        <div><span>Scheduled By</span><strong data-field="scheduled-by"></strong></div>
+        <div><span>Deleted By</span><strong data-field="deleted-by"></strong></div>
+        <div><span>Deleted At</span><strong data-field="deleted-at"></strong></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('deletedMeetingViewModal')?.addEventListener('show.bs.modal', event => {
+    const button = event.relatedTarget;
+    const modal = event.currentTarget;
+    ['title', 'date', 'time', 'venue', 'teams', 'agenda', 'ending-note', 'scheduled-by', 'deleted-by', 'deleted-at'].forEach(field => {
+      const target = modal.querySelector(`[data-field="${field}"]`);
+      const dataKey = field.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+      if (target) target.textContent = button?.dataset[dataKey] || '-';
+    });
+  });
+</script>
+{% endblock %}

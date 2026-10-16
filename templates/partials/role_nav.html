@@ -27,8 +27,8 @@
         <p class="nav-label">Administration</p>
         <a class="{% if request.resolver_match.url_name == 'sports' %}active{% endif %}" href="{% url 'sports' %}"><i class="bi bi-grid"></i><span>Sports</span></a>
         <a class="{% if request.resolver_match.url_name == 'teams' %}active{% endif %}" href="{% url 'teams' %}"><i class="bi bi-diagram-3"></i><span>Teams</span></a>
-        <a class="{% if request.resolver_match.url_name == 'members' %}active{% endif %}" href="{% url 'members' %}"><i class="bi bi-people"></i><span>Add Students</span></a>
-        <a class="{% if request.resolver_match.url_name == 'trainers' %}active{% endif %}" href="{% url 'trainers' %}"><i class="bi bi-person-workspace"></i><span>Add Trainer</span></a>
+        <a class="{% if request.resolver_match.url_name == 'members' %}active{% endif %}" href="{% url 'members' %}"><i class="bi bi-people"></i><span>Students</span></a>
+        <a class="{% if request.resolver_match.url_name == 'trainers' %}active{% endif %}" href="{% url 'trainers' %}"><i class="bi bi-person-workspace"></i><span>Trainers</span></a>
         <a class="{% if request.resolver_match.url_name == 'meetings' %}active{% endif %}" href="{% url 'meetings' %}"><i class="bi bi-calendar2-check"></i><span>Schedule Meeting</span></a>
         <a class="{% if request.resolver_match.url_name == 'schools' %}active{% endif %}" href="{% url 'schools' %}"><i class="bi bi-building"></i><span>Schools</span></a>
         <a class="{% if request.resolver_match.url_name == 'venues' %}active{% endif %}" href="{% url 'venues' %}"><i class="bi bi-geo-alt"></i><span>Venues</span></a>

@@ -21,7 +21,7 @@
 <section class="panel mb-4">
   <div class="section-title"><h2>Login Requests</h2><span class="badge text-bg-light">{{ login_requests|length }} Open</span></div>
   <div class="table-responsive">
-    <table class="table align-middle data-table">
+    <table class="table align-middle data-table" data-default-page-size="100">
       <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Requested</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for request_item in login_requests %}
@@ -49,7 +49,7 @@
 <section class="panel">
   <div class="section-title"><h2>Student List</h2><span class="small text-muted">Registered and assigned students</span></div>
   <div class="table-responsive">
-    <table class="table align-middle data-table">
+    <table class="table align-middle data-table" data-default-page-size="100">
       <thead><tr><th data-filter="false">Student</th><th data-filter="false">Email</th><th data-filter="false">Mobile</th><th data-filter="false">Reg No</th><th>School</th><th>Department</th><th data-filter-label="Sports">Team</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for row in student_rows %}

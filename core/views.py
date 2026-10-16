@@ -1,5 +1,5 @@
 import re
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from io import BytesIO
 
 from django.contrib import messages
@@ -13,8 +13,10 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from allauth.socialaccount.models import SocialApp
@@ -516,6 +518,20 @@ def parse_time_cell(value, fallback):
     raise ValueError("Times must use HH:MM format.")
 
 
+def parse_session_bulk_date(value):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    for date_format in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, date_format).date()
+        except ValueError:
+            continue
+    raise ValueError("Dates must use DD/MM/YYYY format.")
+
+
 BULK_UPLOAD_TEMPLATES = {
     "sports": {
         "filename": "sports_bulk_upload_sample.xlsx",
@@ -549,10 +565,170 @@ BULK_UPLOAD_TEMPLATES = {
     },
     "sessions": {
         "filename": "sessions_bulk_upload_sample.xlsx",
-        "headers": ["Sport", "Team Name", "Team Type", "Gender", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"],
-        "rows": [["Basketball", "Men's Team A", "University", "Male", "Morning Tactical Drill", "2026-07-20", "2026-07-20", "06:30", "08:30", "Morning", "No", "Indoor Stadium", "", "Fitness and drills"]],
+        "headers": ["Sport", "Team Type", "Team Name", "Gender", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"],
+        "rows": [],
     },
 }
+
+
+SESSION_BULK_MAX_ROWS = 500
+
+
+def _quoted_sheet_range(sheet_name, column, start_row, end_row):
+    return f"'{sheet_name}'!${column}${start_row}:${column}${end_row}"
+
+
+def _add_defined_list(workbook, lookup_sheet, name, column, values):
+    values = list(values) or [""]
+    start_row = 2
+    lookup_sheet.cell(1, column, name)
+    for offset, value in enumerate(values, start=start_row):
+        lookup_sheet.cell(offset, column, value)
+    column_letter = get_column_letter(column)
+    workbook.defined_names.add(DefinedName(
+        name,
+        attr_text=_quoted_sheet_range(lookup_sheet.title, column_letter, start_row, start_row + len(values) - 1),
+    ))
+    return column + 1
+
+
+def build_sessions_bulk_upload_workbook():
+    """Build a current, macro-free workbook with row-wise dependent lists."""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Practice Sessions"
+    lookup = workbook.create_sheet("_Lookups")
+
+    headers = BULK_UPLOAD_TEMPLATES["sessions"]["headers"]
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="003366")
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = header_fill
+        cell.alignment = Alignment(horizontal="center")
+
+    active_sports = list(Sport.objects.filter(is_active=True).order_by("name"))
+    active_teams = list(
+        Team.objects.filter(is_active=True, sport__is_active=True)
+        .select_related("sport")
+        .order_by("sport__name", "team_type", "name", "gender")
+    )
+    active_venues = list(Venue.objects.filter(is_active=True).order_by("name").values_list("name", flat=True))
+    if active_teams:
+        sample_team = active_teams[0]
+        sample_date = timezone.localdate()
+        sheet.append([
+            sample_team.sport.name,
+            sample_team.get_team_type_display(),
+            sample_team.name,
+            sample_team.get_gender_display(),
+            "Practice session",
+            sample_date,
+            sample_date,
+            time(6, 30),
+            time(8, 30),
+            Session.ScheduleSlot.MORNING.label,
+            "No",
+            active_venues[0] if active_venues else "Other",
+            "",
+            "Replace this example with the practice details",
+        ])
+
+    next_column = 1
+    next_column = _add_defined_list(workbook, lookup, "SportsList", next_column, [sport.name for sport in active_sports])
+    next_column = _add_defined_list(workbook, lookup, "SchedulesList", next_column, [label for _, label in Session.ScheduleSlot.choices])
+    next_column = _add_defined_list(workbook, lookup, "VenuesList", next_column, [*active_venues, "Other"])
+    next_column = _add_defined_list(workbook, lookup, "EmptyList", next_column, [""])
+
+    type_map = []
+    team_map = []
+    gender_map = []
+    list_number = 1
+    for sport in active_sports:
+        sport_teams = [team for team in active_teams if team.sport_id == sport.pk]
+        available_types = [label for value, label in Team.TeamType.choices if any(team.team_type == value for team in sport_teams)]
+        range_name = f"DependentList{list_number}"
+        list_number += 1
+        next_column = _add_defined_list(workbook, lookup, range_name, next_column, available_types)
+        type_map.append((sport.name, range_name))
+
+        for type_value, type_label in Team.TeamType.choices:
+            typed_teams = [team for team in sport_teams if team.team_type == type_value]
+            if not typed_teams:
+                continue
+            team_names = list(dict.fromkeys(team.name for team in typed_teams))
+            range_name = f"DependentList{list_number}"
+            list_number += 1
+            next_column = _add_defined_list(workbook, lookup, range_name, next_column, team_names)
+            team_map.append((f"{sport.name}|{type_label}", range_name))
+
+            for team_name in team_names:
+                genders = [label for value, label in Team.TeamGender.choices if any(team.name == team_name and team.gender == value for team in typed_teams)]
+                range_name = f"DependentList{list_number}"
+                list_number += 1
+                next_column = _add_defined_list(workbook, lookup, range_name, next_column, genders)
+                gender_map.append((f"{sport.name}|{type_label}|{team_name}", range_name))
+
+    map_start_column = next_column
+    for offset, (map_name, entries) in enumerate((
+        ("SportTypeMap", type_map),
+        ("SportTeamMap", team_map),
+        ("SportTeamGenderMap", gender_map),
+    )):
+        key_column = map_start_column + (offset * 2)
+        value_column = key_column + 1
+        lookup.cell(1, key_column, f"{map_name} Key")
+        lookup.cell(1, value_column, f"{map_name} Range")
+        safe_entries = entries or [("", "EmptyList")]
+        for row_number, (key, range_name) in enumerate(safe_entries, start=2):
+            lookup.cell(row_number, key_column, key)
+            lookup.cell(row_number, value_column, range_name)
+        end = len(safe_entries) + 1
+        start_letter = get_column_letter(key_column)
+        end_letter = get_column_letter(value_column)
+        workbook.defined_names.add(DefinedName(map_name, attr_text=f"'{lookup.title}'!${start_letter}$2:${end_letter}${end}"))
+
+    helper_start = len(headers) + 1
+    for offset, heading in enumerate(("_TeamTypeRange", "_TeamRange", "_GenderRange")):
+        sheet.cell(1, helper_start + offset, heading)
+        sheet.column_dimensions[get_column_letter(helper_start + offset)].hidden = True
+    for row_number in range(2, SESSION_BULK_MAX_ROWS + 2):
+        sheet.cell(row_number, helper_start, f'=IFERROR(VLOOKUP($A{row_number},SportTypeMap,2,FALSE),"EmptyList")')
+        sheet.cell(row_number, helper_start + 1, f'=IFERROR(VLOOKUP($A{row_number}&"|"&$B{row_number},SportTeamMap,2,FALSE),"EmptyList")')
+        sheet.cell(row_number, helper_start + 2, f'=IFERROR(VLOOKUP($A{row_number}&"|"&$B{row_number}&"|"&$C{row_number},SportTeamGenderMap,2,FALSE),"EmptyList")')
+        sheet.cell(row_number, 6).number_format = "DD/MM/YYYY"
+        sheet.cell(row_number, 7).number_format = "DD/MM/YYYY"
+
+    validations = (
+        (DataValidation(type="list", formula1="=SportsList", allow_blank=False), f"A2:A{SESSION_BULK_MAX_ROWS + 1}"),
+        (DataValidation(type="list", formula1=f"=INDIRECT(${get_column_letter(helper_start)}2)", allow_blank=False), f"B2:B{SESSION_BULK_MAX_ROWS + 1}"),
+        (DataValidation(type="list", formula1=f"=INDIRECT(${get_column_letter(helper_start + 1)}2)", allow_blank=False), f"C2:C{SESSION_BULK_MAX_ROWS + 1}"),
+        (DataValidation(type="list", formula1=f"=INDIRECT(${get_column_letter(helper_start + 2)}2)", allow_blank=False), f"D2:D{SESSION_BULK_MAX_ROWS + 1}"),
+        (DataValidation(type="list", formula1="=SchedulesList", allow_blank=False), f"J2:J{SESSION_BULK_MAX_ROWS + 1}"),
+        (DataValidation(type="list", formula1="=VenuesList", allow_blank=False), f"L2:L{SESSION_BULK_MAX_ROWS + 1}"),
+    )
+    for validation, target in validations:
+        validation.error = "Select a value from the current dropdown list."
+        validation.errorTitle = "Invalid selection"
+        validation.showErrorMessage = True
+        sheet.add_data_validation(validation)
+        validation.add(target)
+
+    for column in ("F", "G"):
+        validation = DataValidation(type="date", operator="between", formula1="DATE(2000,1,1)", formula2="DATE(2100,12,31)", allow_blank=False)
+        validation.error = "Enter a valid date in DD/MM/YYYY format."
+        validation.errorTitle = "Invalid date"
+        validation.showErrorMessage = True
+        sheet.add_data_validation(validation)
+        validation.add(f"{column}2:{column}{SESSION_BULK_MAX_ROWS + 1}")
+
+    widths = [22, 18, 24, 14, 28, 15, 15, 14, 14, 16, 12, 24, 24, 32]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:N{SESSION_BULK_MAX_ROWS + 1}"
+    lookup.sheet_state = "hidden"
+    return workbook
 
 
 def read_bulk_upload_rows(uploaded_file):
@@ -563,12 +739,22 @@ def read_bulk_upload_rows(uploaded_file):
     rows = list(sheet.iter_rows(values_only=True))
     if not rows:
         return []
-    headers = [normalize_header(cell) for cell in rows[0]]
+    raw_headers = [str(cell or "").strip() for cell in rows[0]]
+    public_columns = [
+        index for index, header in enumerate(raw_headers)
+        if header and not header.startswith("_")
+    ]
+    headers = [normalize_header(cell) for cell in raw_headers]
     data = []
-    for row in rows[1:]:
-        if not any(cell not in (None, "") for cell in row):
+    for excel_row_number, row in enumerate(rows[1:], start=2):
+        if not any(index < len(row) and row[index] not in (None, "") for index in public_columns):
             continue
-        data.append({headers[index]: row[index] if index < len(row) else "" for index in range(len(headers))})
+        parsed_row = {
+            headers[index]: row[index] if index < len(row) else ""
+            for index in public_columns
+        }
+        parsed_row["__excel_row__"] = excel_row_number
+        data.append(parsed_row)
     return data
 
 
@@ -635,6 +821,8 @@ def find_team_by_details(sport, team_name, team_type, gender):
     if not resolved_team_type or not resolved_gender:
         return None
     return Team.objects.select_related("sport").filter(
+        is_active=True,
+        sport__is_active=True,
         sport__name__iexact=str(sport or "").strip(),
         name__iexact=str(team_name or "").strip(),
         team_type=resolved_team_type,
@@ -940,12 +1128,15 @@ def bulk_upload_sample(request, kind):
     if not template:
         messages.error(request, "Unknown bulk upload sample.")
         return redirect("dashboard")
-    workbook = Workbook()
-    sheet = workbook.active
-    sheet.title = "Sample"
-    sheet.append(template["headers"])
-    for row in template["rows"]:
-        sheet.append(row)
+    if kind == "sessions":
+        workbook = build_sessions_bulk_upload_workbook()
+    else:
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "Sample"
+        sheet.append(template["headers"])
+        for row in template["rows"]:
+            sheet.append(row)
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
@@ -1161,8 +1352,13 @@ def import_trainers_from_file(uploaded_file):
 def import_sessions_from_file(uploaded_file, user):
     created = 0
     errors = []
-    slot_map = {"morning": Session.ScheduleSlot.MORNING, "evening": Session.ScheduleSlot.EVENING}
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    slot_map = {
+        key.lower(): value
+        for value, label in Session.ScheduleSlot.choices
+        for key in (value, label)
+    }
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         missing = missing_required(row, [
             ("sport", "Sport"),
             ("team_name", "Team Name"),
@@ -1181,8 +1377,8 @@ def import_sessions_from_file(uploaded_file, user):
         team_name = str(row.get("team_name") or "").strip()
         team_type = str(row.get("team_type") or "").strip()
         gender = str(row.get("gender") or "").strip()
-        if not Sport.objects.filter(name__iexact=sport_name).exists():
-            errors.append(f"Row {index}: Sport '{sport_name}' was not found.")
+        if not Sport.objects.filter(name__iexact=sport_name, is_active=True).exists():
+            errors.append(f"Row {index}: Sport '{sport_name}' was not found or is inactive.")
             continue
         if not find_team_type(team_type):
             valid_types = ", ".join(label for _, label in Team.TeamType.choices)
@@ -1207,20 +1403,17 @@ def import_sessions_from_file(uploaded_file, user):
             errors.append(f"Row {index}: You cannot schedule for this team.")
             continue
         try:
-            start_date = row.get("start_date")
-            end_date = row.get("end_date") or start_date
-            if isinstance(start_date, datetime):
-                start_date = start_date.date()
-            if isinstance(end_date, datetime):
-                end_date = end_date.date()
-            if isinstance(start_date, str):
-                start_date = datetime.strptime(start_date.strip(), "%Y-%m-%d").date()
-            if isinstance(end_date, str):
-                end_date = datetime.strptime(end_date.strip(), "%Y-%m-%d").date()
-        except ValueError:
-            errors.append(f"Row {index}: Dates must use YYYY-MM-DD format.")
+            start_date = parse_session_bulk_date(row.get("start_date"))
+            end_date = parse_session_bulk_date(row.get("end_date") or row.get("start_date"))
+        except (TypeError, ValueError):
+            errors.append(f"Row {index}: Start Date and End Date must be valid dates in DD/MM/YYYY format.")
             continue
-        slot = slot_map.get(str(row.get("schedule") or "Morning").strip().lower(), Session.ScheduleSlot.MORNING)
+        schedule_label = str(row.get("schedule") or "").strip()
+        slot = slot_map.get(schedule_label.lower())
+        if not slot:
+            valid_schedules = ", ".join(label for _, label in Session.ScheduleSlot.choices)
+            errors.append(f"Row {index}: Schedule '{schedule_label}' is invalid. Use one of: {valid_schedules}.")
+            continue
         default_start_clock = time(6, 30) if slot == Session.ScheduleSlot.MORNING else time(16, 0)
         default_end_clock = time(8, 30) if slot == Session.ScheduleSlot.MORNING else time(18, 0)
         try:
@@ -1237,8 +1430,12 @@ def import_sessions_from_file(uploaded_file, user):
             continue
         venue = str(row.get("venue") or "").strip()
         other_venue = str(row.get("other_venue") or "").strip()
-        if venue.lower() == "other" and other_venue:
-            venue = f"Other - {other_venue}"
+        if venue.lower() == "other":
+            if other_venue:
+                venue = f"Other - {other_venue}"
+        elif not Venue.objects.filter(name__iexact=venue, is_active=True).exists():
+            errors.append(f"Row {index}: Venue '{venue}' was not found or is inactive.")
+            continue
         full_day = truthy_cell(row.get("full_day"), False)
         session = Session.objects.create(
             team=team,
@@ -2100,10 +2297,18 @@ def settings_page(request):
         | Q(is_active=False)
     ).select_related("profile").distinct().order_by("first_name", "last_name", "email")
     notification_count = Notification.objects.filter(user=request.user).count()
+    deleted_sessions = Session.all_objects.filter(is_deleted=True)
+    if not is_admin_user(request.user):
+        deleted_sessions = deleted_sessions.filter(team__coordinator=request.user)
+    can_view_deleted_sessions = is_admin_user(request.user) or role_for(request.user) in TRAINER_ROLES
+    deleted_meetings_count = Meeting.all_objects.filter(is_deleted=True).count() if is_admin_user(request.user) else 0
     return render(request, "core/settings.html", {
         "inactive_users_count": inactive_users.count(),
         "notification_count": notification_count,
         "is_settings_admin": is_admin_user(request.user),
+        "can_view_deleted_sessions": can_view_deleted_sessions,
+        "deleted_sessions_count": deleted_sessions.count() if can_view_deleted_sessions else 0,
+        "deleted_meetings_count": deleted_meetings_count,
     })
 
 
@@ -2138,6 +2343,35 @@ def permanent_delete_user(request, pk):
         user.delete()
         messages.success(request, f"{user_name} permanently deleted.")
     return redirect("deactivated_users")
+
+
+@login_required
+def deleted_sessions(request):
+    if not (is_admin_user(request.user) or role_for(request.user) in TRAINER_ROLES):
+        messages.error(request, "You cannot view deleted sessions.")
+        return redirect("settings")
+    sessions = Session.all_objects.filter(is_deleted=True).select_related(
+        "team", "team__sport", "scheduled_by", "deleted_by"
+    )
+    if not is_admin_user(request.user):
+        sessions = sessions.filter(team__coordinator=request.user)
+    sessions = sessions.order_by("-deleted_at", "-start_at")
+    for session in sessions:
+        session.scheduled_by_name = user_label(session.scheduled_by) if session.scheduled_by else "-"
+        session.deleted_by_name = user_label(session.deleted_by) if session.deleted_by else "-"
+    return render(request, "core/deleted_sessions.html", {"sessions": sessions})
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+def deleted_meetings(request):
+    meetings = Meeting.all_objects.filter(is_deleted=True).prefetch_related(
+        "sports", "teams", "trainers", "participants"
+    ).select_related("scheduled_by", "deleted_by").order_by("-deleted_at", "-meeting_date", "-start_time")
+    meetings = add_meeting_display_data(meetings)
+    for meeting in meetings:
+        meeting.deleted_by_name = user_label(meeting.deleted_by) if meeting.deleted_by else "-"
+    return render(request, "core/deleted_meetings.html", {"meetings": meetings})
 
 
 @login_required
@@ -2284,35 +2518,50 @@ def sessions_list(request):
                     for error in field_errors:
                         messages.error(request, error)
                 messages.error(request, "Please correct the session details and try again.")
-        elif action == "delete" and session:
-            cancelled_title = session.title or "Practice session"
-            cancelled_team = session.team
-            session.status = Session.Status.CANCELLED
-            session.attendance_started_by = None
-            session.attendance_started_by_role = ""
-            session.attendance_started_at = None
-            session.attendance_lock_expires_at = None
-            session.save(update_fields=[
-                "status",
-                "attendance_started_by",
-                "attendance_started_by_role",
-                "attendance_started_at",
-                "attendance_lock_expires_at",
-                "updated_at",
-            ])
-            notify_practice_session(
-                session,
-                "Practice session cancelled",
-                f"{cancelled_title} cancelled for {cancelled_team}.",
-                actor=request.user,
-                teams=[cancelled_team],
-                include_session=False,
-                email_type="practice_cancelled",
-            )
-            messages.success(request, "Practice session cancelled.")
+        elif action in {"cancel", "delete"} and session:
+            if session.attendance_submitted:
+                messages.error(request, "Completed practice sessions cannot be cancelled.")
+            else:
+                cancelled_title = session.title or "Practice session"
+                cancelled_team = session.team
+                session.status = Session.Status.CANCELLED
+                session.attendance_started_by = None
+                session.attendance_started_by_role = ""
+                session.attendance_started_at = None
+                session.attendance_lock_expires_at = None
+                session.save(update_fields=[
+                    "status",
+                    "attendance_started_by",
+                    "attendance_started_by_role",
+                    "attendance_started_at",
+                    "attendance_lock_expires_at",
+                    "updated_at",
+                ])
+                notify_practice_session(
+                    session,
+                    "Practice session cancelled",
+                    f"{cancelled_title} cancelled for {cancelled_team}.",
+                    actor=request.user,
+                    teams=[cancelled_team],
+                    include_session=False,
+                    email_type="practice_cancelled",
+                )
+                messages.success(request, "Practice session cancelled.")
+        elif action == "archive" and session:
+            if session.status != Session.Status.CANCELLED:
+                messages.error(request, "Only cancelled practice sessions can be deleted.")
+            else:
+                session.is_deleted = True
+                session.deleted_at = timezone.now()
+                session.deleted_by = request.user
+                session.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
+                messages.success(request, "Cancelled practice session moved to Deleted Sessions.")
         return redirect("sessions")
 
-    form = ReportFilterForm(request.GET or None)
+    filter_data = request.GET.copy() if request.GET else None
+    if filter_data is not None and not filter_data.get("report_type"):
+        filter_data["report_type"] = "sessions"
+    form = ReportFilterForm(filter_data)
     all_sessions = visible_sessions(request.user)
     session_stats = {
         "today": all_sessions.filter(start_at__date=timezone.localdate()).exclude(status=Session.Status.CANCELLED).count(),
@@ -2339,7 +2588,7 @@ def sessions_list(request):
         if start:
             sessions = sessions.filter(start_at__date__gte=start)
         if end:
-            sessions = sessions.filter(start_at__date__lte=end)
+            sessions = sessions.filter(end_at__date__lte=end)
     team_qs = Team.objects.filter(is_active=True).select_related("sport").order_by("sport__name", "name")
     if not is_admin_user(request.user):
         team_qs = team_qs.filter(coordinator=request.user)
@@ -2542,6 +2791,16 @@ def meetings_list(request):
                 )},
             )
             messages.success(request, "Meeting cancelled and participants notified.")
+            return redirect("meetings")
+        elif action == "archive" and meeting:
+            if meeting.status != Meeting.Status.CANCELLED:
+                messages.error(request, "Only cancelled meetings can be deleted.")
+            else:
+                meeting.is_deleted = True
+                meeting.deleted_at = timezone.now()
+                meeting.deleted_by = request.user
+                meeting.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
+                messages.success(request, "Cancelled meeting moved to Deleted Meetings.")
             return redirect("meetings")
     meeting_qs = visible_meetings(request.user).prefetch_related("sports", "teams", "trainers", "participants").select_related("scheduled_by")
     meeting_stats = {

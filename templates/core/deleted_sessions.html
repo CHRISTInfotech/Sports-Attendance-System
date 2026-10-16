@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Deleted Sessions{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <p class="eyebrow">Settings</p>
+    <h1>Deleted Sessions</h1>
+    <p class="text-muted mb-0">View cancelled practice sessions removed from the operational list.</p>
+  </div>
+</div>
+
+<section class="panel">
+  <div class="section-title"><h2>Deleted Session List</h2><span class="small text-muted">Latest deleted first</span></div>
+  <div class="table-responsive">
+    <table class="table align-middle data-table">
+      <thead><tr><th>Session</th><th>Sport</th><th>Team</th><th>Date</th><th>Deleted</th><th class="text-end">Actions</th></tr></thead>
+      <tbody>
+        {% for session in sessions %}
+          <tr>
+            <td><strong>{{ session.title|default:"Practice session" }}</strong></td>
+            <td>{{ session.team.sport.name }}</td>
+            <td>{{ session.team.get_gender_display }} {{ session.team.name }}</td>
+            <td>{{ session.date_range_display }}</td>
+            <td>{{ session.deleted_at|date:"d M Y, h:i A" }}</td>
+            <td class="text-end">
+              <button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#deletedSessionViewModal"
+                data-title="{{ session.title|default:'Practice session' }}"
+                data-team="{{ session.team.sport.name }} - {{ session.team.get_gender_display }} {{ session.team.name }}"
+                data-date="{{ session.date_range_display }}" data-time="{{ session.time_range_display }}"
+                data-schedule="{{ session.get_schedule_slot_display }}" data-venue="{{ session.venue }}"
+                data-scheduled-by="{{ session.scheduled_by_name }}" data-deleted-by="{{ session.deleted_by_name }}"
+                data-deleted-at="{{ session.deleted_at|date:'d M Y, h:i A' }}" data-notes="{{ session.notes|default:'-' }}">
+                <i class="bi bi-eye"></i> View
+              </button>
+            </td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="6" class="empty-state">No deleted practice sessions.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="modal fade" id="deletedSessionViewModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Deleted Session Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body detail-list">
+        <div><span>Title</span><strong data-field="title"></strong></div>
+        <div><span>Sport / Team</span><strong data-field="team"></strong></div>
+        <div><span>Date</span><strong data-field="date"></strong></div>
+        <div><span>Time</span><strong data-field="time"></strong></div>
+        <div><span>Schedule</span><strong data-field="schedule"></strong></div>
+        <div><span>Venue</span><strong data-field="venue"></strong></div>
+        <div><span>Scheduled By</span><strong data-field="scheduled-by"></strong></div>
+        <div><span>Deleted By</span><strong data-field="deleted-by"></strong></div>
+        <div><span>Deleted At</span><strong data-field="deleted-at"></strong></div>
+        <div><span>Notes</span><strong data-field="notes"></strong></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.getElementById('deletedSessionViewModal')?.addEventListener('show.bs.modal', event => {
+    const button = event.relatedTarget;
+    const modal = event.currentTarget;
+    ['title', 'team', 'date', 'time', 'schedule', 'venue', 'scheduled-by', 'deleted-by', 'deleted-at', 'notes'].forEach(field => {
+      const target = modal.querySelector(`[data-field="${field}"]`);
+      if (target) target.textContent = button?.dataset[field.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] || '-';
+    });
+  });
+</script>
+{% endblock %}
