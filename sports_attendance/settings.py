@@ -38,7 +38,7 @@ def env_list(name, default=''):
 SECRET_KEY = 'django-insecure-xz16%vjed@rb_b0w5g4nr42y6)0wm-c7afc8-4_jyrjz4l-z28'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 if DEBUG:
 	ALLOWED_HOSTS = ["127.0.0.1", "localhost", "testserver"]

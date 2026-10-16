@@ -11,7 +11,7 @@ from django.utils import timezone
 from openpyxl import Workbook
 
 from .models import AttendanceRecord, EmailNotificationJob, Membership, Session, Sport, Team, UserProfile
-from .views import import_students_from_file
+from .views import import_sessions_from_file, import_students_from_file
 from .email_notifications import queue_notification_emails, send_notification_emails
 
 
@@ -271,3 +271,67 @@ class TrainerStudentPermissionTests(TestCase):
         student = User.objects.get(email="bulk.player@christuniversity.in")
         self.assertEqual(student.profile.gender, "Male")
         self.assertTrue(Membership.objects.filter(user=student, team=self.assigned_team, is_active=True).exists())
+
+    @patch("core.views.create_notifications")
+    def test_session_bulk_upload_matches_all_four_team_fields(self, mocked_notifications):
+        target_team = Team.objects.create(
+            sport=self.sport,
+            name="Shared Team",
+            team_type=Team.TeamType.RESERVE,
+            gender=Team.TeamGender.FEMALE,
+            coordinator=self.trainer,
+        )
+        Team.objects.create(
+            sport=self.sport,
+            name="Shared Team",
+            team_type=Team.TeamType.UNIVERSITY,
+            gender=Team.TeamGender.FEMALE,
+            coordinator=self.trainer,
+        )
+        Team.objects.create(
+            sport=self.sport,
+            name="Shared Team",
+            team_type=Team.TeamType.RESERVE,
+            gender=Team.TeamGender.MALE,
+            coordinator=self.trainer,
+        )
+        Team.objects.create(
+            sport=self.other_sport,
+            name="Shared Team",
+            team_type=Team.TeamType.RESERVE,
+            gender=Team.TeamGender.FEMALE,
+            coordinator=self.trainer,
+        )
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Sport", "Team Name", "Team Type", "Gender", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"])
+        sheet.append(["Cricket", "Shared Team", "Reserve", "Female", "Exact Team Practice", "2026-11-01", "2026-11-01", "06:30", "08:30", "Morning", "No", "Ground A", "", "Drills"])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+
+        created, errors = import_sessions_from_file(uploaded, self.trainer)
+
+        self.assertEqual(created, 1)
+        self.assertEqual(errors, [])
+        self.assertEqual(Session.objects.get(title="Exact Team Practice").team, target_team)
+        mocked_notifications.assert_called_once()
+
+    def test_session_bulk_upload_reports_missing_and_invalid_team_details(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Sport", "Team Name", "Team Type", "Gender", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"])
+        sheet.append(["Cricket", "", "University", "Male", "Missing Team", "2026-11-01", "2026-11-01", "06:30", "08:30", "Morning", "No", "Ground A", "", ""])
+        sheet.append(["Cricket", "University Team", "Invalid Type", "Male", "Invalid Type", "2026-11-01", "2026-11-01", "06:30", "08:30", "Morning", "No", "Ground A", "", ""])
+        sheet.append(["Cricket", "University Team", "University", "Unknown", "Invalid Gender", "2026-11-01", "2026-11-01", "06:30", "08:30", "Morning", "No", "Ground A", "", ""])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+
+        created, errors = import_sessions_from_file(uploaded, self.trainer)
+
+        self.assertEqual(created, 0)
+        self.assertEqual(len(errors), 3)
+        self.assertIn("Team Name required", errors[0])
+        self.assertIn("Team Type 'Invalid Type' is invalid", errors[1])
+        self.assertIn("Gender 'Unknown' is invalid", errors[2])

@@ -549,8 +549,8 @@ BULK_UPLOAD_TEMPLATES = {
     },
     "sessions": {
         "filename": "sessions_bulk_upload_sample.xlsx",
-        "headers": ["Team", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"],
-        "rows": [["Basketball - Male Men's Team A", "Morning Tactical Drill", "2026-07-20", "2026-07-20", "06:30", "08:30", "Morning", "No", "Indoor Stadium", "", "Fitness and drills"]],
+        "headers": ["Sport", "Team Name", "Team Type", "Gender", "Title", "Start Date", "End Date", "From Time", "To Time", "Schedule", "Full Day", "Venue", "Other Venue", "Notes"],
+        "rows": [["Basketball", "Men's Team A", "University", "Male", "Morning Tactical Drill", "2026-07-20", "2026-07-20", "06:30", "08:30", "Morning", "No", "Indoor Stadium", "", "Fitness and drills"]],
     },
 }
 
@@ -619,6 +619,27 @@ def normalize_gender(value):
     if value in {"female", "f"}:
         return "Female"
     return ""
+
+
+def find_team_by_details(sport, team_name, team_type, gender):
+    resolved_team_type = find_team_type(team_type)
+    normalized_gender = normalize_choice_label(gender)
+    resolved_gender = next(
+        (
+            stored_value
+            for stored_value, label in Team.TeamGender.choices
+            if normalized_gender in {stored_value.lower(), label.lower()}
+        ),
+        None,
+    )
+    if not resolved_team_type or not resolved_gender:
+        return None
+    return Team.objects.select_related("sport").filter(
+        sport__name__iexact=str(sport or "").strip(),
+        name__iexact=str(team_name or "").strip(),
+        team_type=resolved_team_type,
+        gender=resolved_gender,
+    ).first()
 
 
 def find_team_by_label(label, sport=None, team_type=None):
@@ -1142,13 +1163,45 @@ def import_sessions_from_file(uploaded_file, user):
     errors = []
     slot_map = {"morning": Session.ScheduleSlot.MORNING, "evening": Session.ScheduleSlot.EVENING}
     for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
-        missing = missing_required(row, [("team", "Team"), ("start_date", "Start Date"), ("end_date", "End Date"), ("schedule", "Schedule"), ("venue", "Venue")])
+        missing = missing_required(row, [
+            ("sport", "Sport"),
+            ("team_name", "Team Name"),
+            ("team_type", "Team Type"),
+            ("gender", "Gender"),
+            ("start_date", "Start Date"),
+            ("end_date", "End Date"),
+            ("schedule", "Schedule"),
+            ("venue", "Venue"),
+        ])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
             continue
-        team = find_team_by_label(row.get("team"))
+
+        sport_name = str(row.get("sport") or "").strip()
+        team_name = str(row.get("team_name") or "").strip()
+        team_type = str(row.get("team_type") or "").strip()
+        gender = str(row.get("gender") or "").strip()
+        if not Sport.objects.filter(name__iexact=sport_name).exists():
+            errors.append(f"Row {index}: Sport '{sport_name}' was not found.")
+            continue
+        if not find_team_type(team_type):
+            valid_types = ", ".join(label for _, label in Team.TeamType.choices)
+            errors.append(f"Row {index}: Team Type '{team_type}' is invalid. Use one of: {valid_types}.")
+            continue
+        valid_gender = any(
+            normalize_choice_label(gender) in {value.lower(), label.lower()}
+            for value, label in Team.TeamGender.choices
+        )
+        if not valid_gender:
+            valid_genders = ", ".join(label for _, label in Team.TeamGender.choices)
+            errors.append(f"Row {index}: Gender '{gender}' is invalid. Use one of: {valid_genders}.")
+            continue
+        team = find_team_by_details(sport_name, team_name, team_type, gender)
         if not team:
-            errors.append(f"Row {index}: Team was not found.")
+            errors.append(
+                f"Row {index}: No team matched Sport '{sport_name}', Team Name '{team_name}', "
+                f"Team Type '{team_type}', and Gender '{gender}'."
+            )
             continue
         if not can_schedule_session(user, team):
             errors.append(f"Row {index}: You cannot schedule for this team.")
