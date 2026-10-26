@@ -550,18 +550,18 @@ BULK_UPLOAD_TEMPLATES = {
     },
     "teams": {
         "filename": "teams_bulk_upload_sample.xlsx",
-        "headers": ["Sport", "Team Name", "Team Type", "Gender", "Captain Email", "Vice Captain Email", "Trainer Email", "Status"],
-        "rows": [["Basketball", "Men's Team A", "University", "Male", "", "", "coach@christuniversity.in", "Active"]],
+        "headers": ["Sport", "Team Name", "Team Type", "Gender", "Captain Email", "Vice Captain Email", "Trainer", "Status"],
+        "rows": [],
     },
     "students": {
         "filename": "students_bulk_upload_sample.xlsx",
-        "headers": ["Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department", "Gender", "Sport", "Team Type", "Team", "Status"],
-        "rows": [["Rahul Sharma", "rahul.sharma@christuniversity.in", "9876543210", "22104321", "School of Sciences", "MSDS", "Male", "Basketball", "University", "Men's Team A", "Active"]],
+        "headers": ["Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department", "Sport", "Team Type", "Team", "Gender", "Status"],
+        "rows": [],
     },
     "trainers": {
         "filename": "trainers_bulk_upload_sample.xlsx",
-        "headers": ["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Teams"],
-        "rows": [["Coach Ramesh", "coach.ramesh@christuniversity.in", "9876543211", "TRN001", "Basketball - Male Men's Team A"]],
+        "headers": ["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Team", "Gender"],
+        "rows": [],
     },
     "sessions": {
         "filename": "sessions_bulk_upload_sample.xlsx",
@@ -590,6 +590,104 @@ def _add_defined_list(workbook, lookup_sheet, name, column, values):
         attr_text=_quoted_sheet_range(lookup_sheet.title, column_letter, start_row, start_row + len(values) - 1),
     ))
     return column + 1
+
+
+def _add_list_validation(sheet, formula, target, allow_blank=True):
+    validation = DataValidation(type="list", formula1=formula, allow_blank=allow_blank)
+    validation.error = "Select a value from the current dropdown list."
+    validation.errorTitle = "Invalid selection"
+    validation.showErrorMessage = True
+    sheet.add_data_validation(validation)
+    validation.add(target)
+
+
+def _management_bulk_workbook(kind):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = {"teams": "Sports Teams", "students": "Students", "trainers": "Trainers"}[kind]
+    lookup = workbook.create_sheet("_Lookups")
+    headers = BULK_UPLOAD_TEMPLATES[kind]["headers"]
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="003366")
+        cell.alignment = Alignment(horizontal="center")
+
+    sports = list(Sport.objects.filter(is_active=True).order_by("name"))
+    teams = list(Team.objects.filter(is_active=True, sport__is_active=True).select_related("sport").order_by("sport__name", "team_type", "gender", "name"))
+    schools = list(School.objects.filter(is_active=True).order_by("name").values_list("name", flat=True))
+    trainers = list(User.objects.filter(is_active=True, profile__role__in=TRAINER_ROLES).order_by("first_name", "last_name", "email"))
+    trainer_labels = [f"{user_label(trainer)} ({trainer.email})" for trainer in trainers]
+
+    column = 1
+    column = _add_defined_list(workbook, lookup, "MgmtSportsList", column, [sport.name for sport in sports])
+    column = _add_defined_list(workbook, lookup, "MgmtTeamTypesList", column, [label for _, label in Team.TeamType.choices])
+    column = _add_defined_list(workbook, lookup, "MgmtGendersList", column, [label for _, label in Team.TeamGender.choices])
+    column = _add_defined_list(workbook, lookup, "MgmtSchoolsList", column, schools)
+    column = _add_defined_list(workbook, lookup, "MgmtTrainersList", column, trainer_labels)
+    column = _add_defined_list(workbook, lookup, "MgmtStatusesList", column, ["Active", "Inactive"])
+    column = _add_defined_list(workbook, lookup, "MgmtEmptyList", column, [""])
+
+    if kind == "teams":
+        _add_list_validation(sheet, "=MgmtSportsList", f"A2:A{SESSION_BULK_MAX_ROWS + 1}", False)
+        _add_list_validation(sheet, "=MgmtTeamTypesList", f"C2:C{SESSION_BULK_MAX_ROWS + 1}", False)
+        _add_list_validation(sheet, "=MgmtGendersList", f"D2:D{SESSION_BULK_MAX_ROWS + 1}", False)
+        _add_list_validation(sheet, "=MgmtTrainersList", f"G2:G{SESSION_BULK_MAX_ROWS + 1}")
+        _add_list_validation(sheet, "=MgmtStatusesList", f"H2:H{SESSION_BULK_MAX_ROWS + 1}", False)
+    else:
+        type_entries = []
+        team_entries = []
+        list_number = 1
+        for sport in sports:
+            sport_teams = [team for team in teams if team.sport_id == sport.pk]
+            type_labels = [label for value, label in Team.TeamType.choices if any(team.team_type == value for team in sport_teams)]
+            type_range = f"MgmtDependentList{list_number}"
+            list_number += 1
+            column = _add_defined_list(workbook, lookup, type_range, column, type_labels)
+            type_entries.append((sport.name, type_range))
+            for type_value, type_label in Team.TeamType.choices:
+                for gender_value, gender_label in Team.TeamGender.choices:
+                    names = list(dict.fromkeys(team.name for team in sport_teams if team.team_type == type_value and team.gender == gender_value))
+                    if not names:
+                        continue
+                    team_range = f"MgmtDependentList{list_number}"
+                    list_number += 1
+                    column = _add_defined_list(workbook, lookup, team_range, column, names)
+                    team_entries.append((f"{sport.name}|{type_label}|{gender_label}", team_range))
+
+        map_column = column
+        for offset, (name, entries) in enumerate((("MgmtSportTypeMap", type_entries), ("MgmtTeamMap", team_entries))):
+            key_column = map_column + offset * 2
+            value_column = key_column + 1
+            safe_entries = entries or [("", "MgmtEmptyList")]
+            for row_number, (key, range_name) in enumerate(safe_entries, start=2):
+                lookup.cell(row_number, key_column, key)
+                lookup.cell(row_number, value_column, range_name)
+            workbook.defined_names.add(DefinedName(name, attr_text=f"'{lookup.title}'!${get_column_letter(key_column)}$2:${get_column_letter(value_column)}${len(safe_entries) + 1}"))
+
+        helper_start = len(headers) + 1
+        sheet.cell(1, helper_start, "_TeamTypeRange")
+        sheet.cell(1, helper_start + 1, "_TeamRange")
+        sheet.column_dimensions[get_column_letter(helper_start)].hidden = True
+        sheet.column_dimensions[get_column_letter(helper_start + 1)].hidden = True
+        if kind == "students":
+            sport_col, type_col, team_col, gender_col = "G", "H", "I", "J"
+            _add_list_validation(sheet, "=MgmtSchoolsList", f"E2:E{SESSION_BULK_MAX_ROWS + 1}")
+            _add_list_validation(sheet, "=MgmtStatusesList", f"K2:K{SESSION_BULK_MAX_ROWS + 1}", False)
+        else:
+            sport_col, type_col, team_col, gender_col = "E", "F", "G", "H"
+        for row_number in range(2, SESSION_BULK_MAX_ROWS + 2):
+            sheet.cell(row_number, helper_start, f'=IFERROR(VLOOKUP(${sport_col}{row_number},MgmtSportTypeMap,2,FALSE),"MgmtEmptyList")')
+            sheet.cell(row_number, helper_start + 1, f'=IFERROR(VLOOKUP(${sport_col}{row_number}&"|"&${type_col}{row_number}&"|"&${gender_col}{row_number},MgmtTeamMap,2,FALSE),"MgmtEmptyList")')
+        _add_list_validation(sheet, "=MgmtSportsList", f"{sport_col}2:{sport_col}{SESSION_BULK_MAX_ROWS + 1}")
+        _add_list_validation(sheet, f"=INDIRECT(${get_column_letter(helper_start)}2)", f"{type_col}2:{type_col}{SESSION_BULK_MAX_ROWS + 1}")
+        _add_list_validation(sheet, f"=INDIRECT(${get_column_letter(helper_start + 1)}2)", f"{team_col}2:{team_col}{SESSION_BULK_MAX_ROWS + 1}")
+        _add_list_validation(sheet, "=MgmtGendersList", f"{gender_col}2:{gender_col}{SESSION_BULK_MAX_ROWS + 1}")
+
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{SESSION_BULK_MAX_ROWS + 1}"
+    lookup.sheet_state = "hidden"
+    return workbook
 
 
 def build_sessions_bulk_upload_workbook():
@@ -805,6 +903,34 @@ def normalize_gender(value):
     if value in {"female", "f"}:
         return "Female"
     return ""
+
+
+def resolve_team_gender(value):
+    normalized = normalize_choice_label(value)
+    for stored_value, label in Team.TeamGender.choices:
+        if normalized in {stored_value.lower(), label.lower()}:
+            return stored_value
+    return None
+
+
+def find_trainer_by_choice(value):
+    choice = str(value or "").strip()
+    if not choice:
+        return None
+    email_match = re.search(r"\(([^()]+@[^()]+)\)\s*$", choice)
+    email = email_match.group(1) if email_match else choice
+    trainer = User.objects.filter(
+        email__iexact=email,
+        is_active=True,
+        profile__role__in=TRAINER_ROLES,
+    ).first()
+    if trainer:
+        return trainer
+    matches = [
+        user for user in User.objects.filter(is_active=True, profile__role__in=TRAINER_ROLES)
+        if user_label(user).lower() == choice.lower()
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def find_team_by_details(sport, team_name, team_type, gender):
@@ -1130,6 +1256,8 @@ def bulk_upload_sample(request, kind):
         return redirect("dashboard")
     if kind == "sessions":
         workbook = build_sessions_bulk_upload_workbook()
+    elif kind in {"teams", "students", "trainers"}:
+        workbook = _management_bulk_workbook(kind)
     else:
         workbook = Workbook()
         sheet = workbook.active
@@ -1193,22 +1321,31 @@ def import_schools_from_file(uploaded_file):
 def import_teams_from_file(uploaded_file):
     created = 0
     errors = []
-    type_map = {label.lower(): value for value, label in Team.TeamType.choices}
-    gender_map = {label.lower(): value for value, label in Team.TeamGender.choices}
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         sport_name = str(row.get("sport") or "").strip()
         team_name = str(row.get("team_name") or row.get("name") or "").strip()
-        missing = []
-        if not sport_name:
-            missing.append("Sport")
-        if not team_name:
-            missing.append("Team Name")
+        missing = missing_required(row, [("sport", "Sport"), ("team_name", "Team Name"), ("team_type", "Team Type"), ("gender", "Gender")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
             continue
-        sport, _ = Sport.objects.get_or_create(name=sport_name, defaults={"is_active": True})
-        team_type = type_map.get(str(row.get("team_type") or "University").strip().lower(), Team.TeamType.UNIVERSITY)
-        gender = gender_map.get(str(row.get("gender") or "Male").strip().lower(), Team.TeamGender.MALE)
+        sport = Sport.objects.filter(name__iexact=sport_name, is_active=True).first()
+        if not sport:
+            errors.append(f"Row {index}: Sport '{sport_name}' was not found or is inactive.")
+            continue
+        team_type = find_team_type(row.get("team_type"))
+        if not team_type:
+            errors.append(f"Row {index}: Team Type '{row.get('team_type')}' is invalid.")
+            continue
+        gender = resolve_team_gender(row.get("gender"))
+        if not gender:
+            errors.append(f"Row {index}: Gender '{row.get('gender')}' is invalid.")
+            continue
+        trainer_value = row.get("trainer") or row.get("trainer_email")
+        trainer = find_trainer_by_choice(trainer_value)
+        if trainer_value and not trainer:
+            errors.append(f"Row {index}: Trainer '{trainer_value}' was not found or is not an active Trainer.")
+            continue
         captain = find_user_by_email(row.get("captain_email"))
         vice_captain = find_user_by_email(row.get("vice_captain_email"))
         current_team = Team.objects.filter(sport=sport, name=team_name, team_type=team_type, gender=gender).first()
@@ -1241,7 +1378,7 @@ def import_teams_from_file(uploaded_file):
             defaults={
                 "captain": captain,
                 "vice_captain": vice_captain,
-                "coordinator": find_user_by_email(row.get("trainer_email")),
+                "coordinator": trainer,
                 "is_active": truthy_cell(row.get("status") or row.get("active"), True),
             },
         )
@@ -1252,17 +1389,30 @@ def import_teams_from_file(uploaded_file):
 def import_students_from_file(uploaded_file, user=None):
     created = 0
     errors = []
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         missing = missing_required(row, [("student_name", "Student Name"), ("student_email", "Student Email")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
             continue
         sport_name = str(row.get("sport") or "").strip()
         team_type = str(row.get("team_type") or "").strip()
-        team = find_team_by_label(row.get("team"), sport=sport_name, team_type=team_type)
-        if row.get("team") and not team:
-            errors.append(f"Row {index}: Team was not found for the selected Sport and Team Type.")
-            continue
+        team_name = str(row.get("team") or row.get("team_name") or "").strip()
+        gender = str(row.get("gender") or "").strip()
+        hierarchy_values = [sport_name, team_type, team_name]
+        team = None
+        if any(hierarchy_values):
+            hierarchy_missing = [label for value, label in zip(
+                [sport_name, team_type, team_name, gender],
+                ["Sport", "Team Type", "Team", "Gender"],
+            ) if not value]
+            if hierarchy_missing:
+                errors.append(f"Row {index}: {', '.join(hierarchy_missing)} required when assigning a Team.")
+                continue
+            team = find_team_by_details(sport_name, team_name, team_type, gender)
+            if not team:
+                errors.append(f"Row {index}: No active Team matched Sport '{sport_name}', Team Type '{team_type}', Team '{team_name}', and Gender '{gender}'.")
+                continue
         if user and not is_admin_user(user):
             if not team:
                 errors.append(f"Row {index}: Team is required for trainer uploads.")
@@ -1271,7 +1421,10 @@ def import_students_from_file(uploaded_file, user=None):
                 errors.append(f"Row {index}: You cannot add students to this team.")
                 continue
         try:
-            school = resolve_school(row.get("school"), create=True)
+            school_value = str(row.get("school") or "").strip()
+            school = resolve_school(school_value)
+            if school_value and (not school or not school.is_active):
+                raise ValueError(f"School '{school_value}' was not found or is inactive.")
             student = save_student_record(
                 row.get("student_name"),
                 row.get("student_email"),
@@ -1279,7 +1432,7 @@ def import_students_from_file(uploaded_file, user=None):
                 row.get("department") or row.get("class"),
                 row.get("mobile_number"),
                 row.get("reg_no") or row.get("register_no"),
-                row.get("gender"),
+                gender,
             )
             if team:
                 conflict = validate_student_team_memberships(student, [team], replace_team_ids=[team.pk])
@@ -1306,7 +1459,8 @@ def import_students_from_file(uploaded_file, user=None):
 def import_trainers_from_file(uploaded_file):
     created = 0
     errors = []
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         missing = missing_required(row, [("trainer_name", "Trainer Name"), ("trainer_email", "Trainer Email")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
@@ -1321,6 +1475,27 @@ def import_trainers_from_file(uploaded_file):
         if phone and not re.fullmatch(r"\d{10}", phone):
             errors.append(f"Row {index}: Mobile number must be exactly 10 digits.")
             continue
+        legacy_team_upload = row.get("teams") not in (None, "")
+        resolved_teams = []
+        if legacy_team_upload:
+            labels = [label.strip() for label in str(row.get("teams") or "").split(",") if label.strip()]
+            resolved_teams = [find_team_by_label(label) for label in labels]
+            if any(team is None for team in resolved_teams):
+                errors.append(f"Row {index}: One or more Teams were not found.")
+                continue
+        else:
+            hierarchy = [str(row.get(key) or "").strip() for key in ("sport", "team_type", "team", "gender")]
+            if any(hierarchy):
+                labels = ["Sport", "Team Type", "Team", "Gender"]
+                missing_hierarchy = [label for value, label in zip(hierarchy, labels) if not value]
+                if missing_hierarchy:
+                    errors.append(f"Row {index}: {', '.join(missing_hierarchy)} required when assigning a Team.")
+                    continue
+                team = find_team_by_details(hierarchy[0], hierarchy[2], hierarchy[1], hierarchy[3])
+                if not team:
+                    errors.append(f"Row {index}: No active Team matched Sport '{hierarchy[0]}', Team Type '{hierarchy[1]}', Team '{hierarchy[2]}', and Gender '{hierarchy[3]}'.")
+                    continue
+                resolved_teams = [team]
         trainer = User.objects.filter(email__iexact=email).first()
         try:
             validate_unique_register_no(row.get("reg_no") or row.get("register_no"), trainer)
@@ -1341,10 +1516,12 @@ def import_trainers_from_file(uploaded_file):
         profile.phone = phone
         profile.register_no = str(row.get("reg_no") or row.get("register_no") or "").strip()
         profile.save(update_fields=["role", "phone", "register_no", "updated_at"])
-        teams = [find_team_by_label(label) for label in str(row.get("teams") or "").split(",")]
-        team_ids = [team.pk for team in teams if team]
-        Team.objects.filter(coordinator=trainer).exclude(pk__in=team_ids).update(coordinator=None)
-        Team.objects.filter(pk__in=team_ids).update(coordinator=trainer)
+        if legacy_team_upload:
+            team_ids = [team.pk for team in resolved_teams]
+            Team.objects.filter(coordinator=trainer).exclude(pk__in=team_ids).update(coordinator=None)
+            Team.objects.filter(pk__in=team_ids).update(coordinator=trainer)
+        elif resolved_teams:
+            Team.objects.filter(pk=resolved_teams[0].pk).update(coordinator=trainer)
         created += 1
     return created, errors
 

@@ -15,7 +15,15 @@ from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
 from .models import AttendanceRecord, EmailNotificationJob, Meeting, Membership, Session, Sport, Team, UserProfile, Venue
-from .views import build_sessions_bulk_upload_workbook, import_sessions_from_file, import_students_from_file, read_bulk_upload_rows
+from .views import (
+    _management_bulk_workbook,
+    build_sessions_bulk_upload_workbook,
+    import_sessions_from_file,
+    import_students_from_file,
+    import_teams_from_file,
+    import_trainers_from_file,
+    read_bulk_upload_rows,
+)
 from .email_notifications import queue_notification_emails, send_notification_emails
 
 
@@ -425,6 +433,103 @@ class TrainerStudentPermissionTests(TestCase):
         student = User.objects.get(email="bulk.player@christuniversity.in")
         self.assertEqual(student.profile.gender, "Male")
         self.assertTrue(Membership.objects.filter(user=student, team=self.assigned_team, is_active=True).exists())
+
+    def test_management_bulk_templates_have_dynamic_dropdowns_and_requested_columns(self):
+        school = self.assigned_student.profile.school
+        if school is None:
+            from .models import School
+            school = School.objects.create(name="School of Sciences")
+
+        team_book = _management_bulk_workbook("teams")
+        team_sheet = team_book["Sports Teams"]
+        self.assertEqual([team_sheet.cell(1, column).value for column in range(1, 9)], [
+            "Sport", "Team Name", "Team Type", "Gender", "Captain Email", "Vice Captain Email", "Trainer", "Status",
+        ])
+        self.assertEqual(len(team_sheet.data_validations.dataValidation), 5)
+        self.assertEqual(team_book["_Lookups"].sheet_state, "hidden")
+
+        student_book = _management_bulk_workbook("students")
+        student_sheet = student_book["Students"]
+        self.assertEqual([student_sheet.cell(1, column).value for column in range(1, 12)], [
+            "Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department",
+            "Sport", "Team Type", "Team", "Gender", "Status",
+        ])
+        student_formulas = [validation.formula1 for validation in student_sheet.data_validations.dataValidation]
+        self.assertIn("=MgmtSchoolsList", student_formulas)
+        self.assertIn("=MgmtGendersList", student_formulas)
+        self.assertIn("=INDIRECT($L2)", student_formulas)
+        self.assertIn("=INDIRECT($M2)", student_formulas)
+        self.assertIn('$G2&"|"&$H2&"|"&$J2', student_sheet["M2"].value)
+
+        trainer_book = _management_bulk_workbook("trainers")
+        trainer_sheet = trainer_book["Trainers"]
+        self.assertEqual([trainer_sheet.cell(1, column).value for column in range(1, 9)], [
+            "Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Team", "Gender",
+        ])
+        self.assertIn('$E2&"|"&$F2&"|"&$H2', trainer_sheet["J2"].value)
+
+    def test_team_bulk_upload_validates_dropdown_values_and_assigns_trainer(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Sport", "Team Name", "Team Type", "Gender", "Captain Email", "Vice Captain Email", "Trainer", "Status"])
+        sheet.append(["Cricket", "New Team", "Reserve", "Female", "", "", f"{self.trainer.email}", "Active"])
+        sheet.append(["Unknown Sport", "Bad Team", "University", "Male", "", "", "", "Active"])
+        sheet.append(["Cricket", "Bad Type", "Invalid", "Male", "", "", "", "Active"])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+
+        created, errors = import_teams_from_file(uploaded)
+
+        self.assertEqual(created, 1)
+        self.assertEqual(len(errors), 2)
+        self.assertEqual(Team.objects.get(name="New Team").coordinator, self.trainer)
+        self.assertIn("Unknown Sport", errors[0])
+        self.assertIn("Team Type", errors[1])
+
+    def test_student_team_dropdown_combination_is_enforced(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department", "Sport", "Team Type", "Team", "Gender", "Status"])
+        sheet.append(["Valid Student", "valid.bulk@christuniversity.in", "", "V001", "", "MSDS", "Cricket", "University", "University Team", "Male", "Active"])
+        sheet.append(["Invalid Student", "invalid.bulk@christuniversity.in", "", "V002", "", "MSDS", "Cricket", "University", "University Team", "Female", "Active"])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+
+        created, errors = import_students_from_file(uploaded, self.trainer)
+
+        self.assertEqual(created, 1)
+        self.assertEqual(len(errors), 1)
+        self.assertTrue(Membership.objects.filter(user__email="valid.bulk@christuniversity.in", team=self.assigned_team).exists())
+        self.assertFalse(User.objects.filter(email="invalid.bulk@christuniversity.in").exists())
+        self.assertIn("No active Team matched", errors[0])
+
+    def test_trainer_bulk_upload_supports_exact_team_hierarchy_and_multiple_rows(self):
+        second_team = Team.objects.create(
+            sport=self.other_sport,
+            name="Second Team",
+            team_type=Team.TeamType.RECREATIONAL,
+            gender=Team.TeamGender.FEMALE,
+        )
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Team", "Gender"])
+        sheet.append(["Bulk Coach", "bulk.coach@christuniversity.in", "9876543212", "TC01", "Cricket", "University", "University Team", "Male"])
+        sheet.append(["Bulk Coach", "bulk.coach@christuniversity.in", "9876543212", "TC01", "Football", "Recreational", "Second Team", "Female"])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+
+        created, errors = import_trainers_from_file(uploaded)
+
+        self.assertEqual(created, 2)
+        self.assertEqual(errors, [])
+        trainer = User.objects.get(email="bulk.coach@christuniversity.in")
+        self.assigned_team.refresh_from_db()
+        second_team.refresh_from_db()
+        self.assertEqual(self.assigned_team.coordinator, trainer)
+        self.assertEqual(second_team.coordinator, trainer)
 
     @patch("core.views.create_notifications")
     def test_session_bulk_upload_matches_all_four_team_fields(self, mocked_notifications):
