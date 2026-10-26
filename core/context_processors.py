@@ -15,7 +15,7 @@ def breadcrumbs(request):
         "schools": "Schools",
         "venues": "Venues",
         "settings": "Settings",
-        "deactivated_users": "Deleted / Deactivated Users",
+        "deactivated_users": "Deleted / Inactive Users",
         "deleted_sessions": "Deleted Sessions",
         "deleted_meetings": "Deleted Meetings",
         "sessions": "Schedule Practice",

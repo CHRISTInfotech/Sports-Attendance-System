@@ -1,16 +1,16 @@
 {% extends "base.html" %}
-{% block title %}Deleted / Deactivated Users{% endblock %}
+{% block title %}Deleted / Inactive Users{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <p class="eyebrow">Settings</p>
-    <h1>Deleted / Deactivated Users</h1>
-    <p class="text-muted mb-0">Restore users who were deleted or deactivated.</p>
+    <h1>Deleted / Inactive Users</h1>
+    <p class="text-muted mb-0">Restore users who were deleted or marked Inactive.</p>
   </div>
 </div>
 
 <section class="panel">
-  <div class="section-title"><h2>User List</h2><span class="small text-muted">Deleted / deactivated users</span></div>
+  <div class="section-title"><h2>User List</h2><span class="small text-muted">Deleted / inactive users</span></div>
   <div class="table-responsive">
     <table class="table align-middle data-table">
       <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Mobile</th><th>Status</th><th>Reason / Note</th><th class="text-end">Actions</th></tr></thead>
@@ -25,7 +25,7 @@
               {% if item.recycle_status == 'DELETED' %}
                 <span class="badge text-bg-danger">Deleted</span>
               {% else %}
-                <span class="badge text-bg-secondary">Deactivated</span>
+                <span class="badge text-bg-secondary">Inactive</span>
               {% endif %}
             </td>
             <td>{{ item.profile.account_status_note|default:"-" }}</td>
@@ -40,7 +40,7 @@
             </td>
           </tr>
         {% empty %}
-          <tr><td colspan="7" class="empty-state">No deleted or deactivated users.</td></tr>
+          <tr><td colspan="7" class="empty-state">No deleted or inactive users.</td></tr>
         {% endfor %}
       </tbody>
     </table>

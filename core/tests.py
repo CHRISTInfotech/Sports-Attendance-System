@@ -14,14 +14,18 @@ from django.urls import reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
-from .models import AttendanceRecord, EmailNotificationJob, Meeting, Membership, Session, Sport, Team, UserProfile, Venue
+from .models import AttendanceRecord, EmailNotificationJob, Meeting, Membership, School, Session, Sport, Team, UserProfile, Venue
 from .views import (
     _management_bulk_workbook,
+    _simple_status_bulk_workbook,
     build_sessions_bulk_upload_workbook,
+    import_schools_from_file,
     import_sessions_from_file,
+    import_sports_from_file,
     import_students_from_file,
     import_teams_from_file,
     import_trainers_from_file,
+    import_venues_from_file,
     read_bulk_upload_rows,
 )
 from .email_notifications import queue_notification_emails, send_notification_emails
@@ -452,21 +456,83 @@ class TrainerStudentPermissionTests(TestCase):
         student_sheet = student_book["Students"]
         self.assertEqual([student_sheet.cell(1, column).value for column in range(1, 12)], [
             "Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department",
-            "Sport", "Team Type", "Team", "Gender", "Status",
+            "Sport", "Team Type", "Gender", "Team", "Status",
         ])
         student_formulas = [validation.formula1 for validation in student_sheet.data_validations.dataValidation]
         self.assertIn("=MgmtSchoolsList", student_formulas)
         self.assertIn("=MgmtGendersList", student_formulas)
         self.assertIn("=INDIRECT($L2)", student_formulas)
         self.assertIn("=INDIRECT($M2)", student_formulas)
-        self.assertIn('$G2&"|"&$H2&"|"&$J2', student_sheet["M2"].value)
+        self.assertIn('$G2&"|"&$H2&"|"&$I2', student_sheet["M2"].value)
 
         trainer_book = _management_bulk_workbook("trainers")
         trainer_sheet = trainer_book["Trainers"]
-        self.assertEqual([trainer_sheet.cell(1, column).value for column in range(1, 9)], [
-            "Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Team", "Gender",
+        self.assertEqual([trainer_sheet.cell(1, column).value for column in range(1, 10)], [
+            "Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Gender", "Team", "Status",
         ])
-        self.assertIn('$E2&"|"&$F2&"|"&$H2', trainer_sheet["J2"].value)
+        self.assertIn('$E2&"|"&$F2&"|"&$G2', trainer_sheet["K2"].value)
+        self.assertIn("=MgmtStatusesList", [validation.formula1 for validation in trainer_sheet.data_validations.dataValidation])
+
+    def test_all_applicable_bulk_templates_have_active_inactive_status_dropdown(self):
+        for kind in ("sports", "venues", "schools"):
+            workbook = _simple_status_bulk_workbook(kind)
+            sheet = workbook["Sample"]
+            self.assertIn("Status", [cell.value for cell in sheet[1]])
+            self.assertEqual(
+                [validation.formula1 for validation in sheet.data_validations.dataValidation],
+                ["=SimpleStatusesList"],
+            )
+            lookup_values = [workbook["_Lookups"].cell(row, 1).value for row in (2, 3)]
+            self.assertEqual(lookup_values, ["Active", "Inactive"])
+
+        for kind in ("teams", "students", "trainers"):
+            workbook = _management_bulk_workbook(kind)
+            sheet = workbook[{"teams": "Sports Teams", "students": "Students", "trainers": "Trainers"}[kind]]
+            self.assertIn("Status", [cell.value for cell in sheet[1]])
+            self.assertIn("=MgmtStatusesList", [validation.formula1 for validation in sheet.data_validations.dataValidation])
+
+    def test_bulk_imports_reject_nonstandard_status_values(self):
+        cases = (
+            (import_sports_from_file, ["Sport Name", "Description", "Status"], ["Status Sport", "", "Deactivated"]),
+            (import_venues_from_file, ["Venue Name", "Location", "Status"], ["Status Venue", "", "Yes"]),
+            (import_schools_from_file, ["School Name", "Description", "Status"], ["Status School", "", "Disabled"]),
+        )
+        for importer, headers, values in cases:
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(headers)
+            sheet.append(values)
+            uploaded = BytesIO()
+            workbook.save(uploaded)
+            uploaded.seek(0)
+            created, errors = importer(uploaded)
+            self.assertEqual(created, 0)
+            self.assertEqual(errors, ["Row 2: Status must be Active or Inactive."])
+
+    def test_inactive_status_is_saved_for_sport_and_trainer(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["Sport Name", "Description", "Status"])
+        sheet.append(["Inactive Sport", "", "Inactive"])
+        uploaded = BytesIO()
+        workbook.save(uploaded)
+        uploaded.seek(0)
+        created, errors = import_sports_from_file(uploaded)
+        self.assertEqual((created, errors), (1, []))
+        self.assertFalse(Sport.objects.get(name="Inactive Sport").is_active)
+
+        trainer_book = Workbook()
+        trainer_sheet = trainer_book.active
+        trainer_sheet.append(["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Status"])
+        trainer_sheet.append(["Inactive Coach", "inactive.coach@christuniversity.in", "", "IC01", "Inactive"])
+        trainer_upload = BytesIO()
+        trainer_book.save(trainer_upload)
+        trainer_upload.seek(0)
+        created, errors = import_trainers_from_file(trainer_upload)
+        self.assertEqual((created, errors), (1, []))
+        trainer = User.objects.get(email="inactive.coach@christuniversity.in")
+        self.assertFalse(trainer.is_active)
+        self.assertEqual(trainer.profile.account_status, UserProfile.AccountStatus.DEACTIVATED)
 
     def test_team_bulk_upload_validates_dropdown_values_and_assigns_trainer(self):
         workbook = Workbook()

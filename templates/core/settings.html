@@ -9,7 +9,7 @@
   {% if is_settings_admin %}
     <a class="settings-card" href="{% url 'deactivated_users' %}">
       <span class="stat-icon"><i class="bi bi-person-x"></i></span>
-      <span class="settings-card-title">Deleted / Deactivated Users</span>
+      <span class="settings-card-title">Deleted / Inactive Users</span>
       <strong>{{ inactive_users_count }}</strong>
     </a>
   {% endif %}

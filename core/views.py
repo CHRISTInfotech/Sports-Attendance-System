@@ -323,8 +323,8 @@ def notify_team_membership_change(actor, users, team, change):
     labels = {
         "added": ("Team membership added", "added to"),
         "removed": ("Team membership removed", "removed from"),
-        "activated": ("Team membership activated", "activated for"),
-        "deactivated": ("Team membership deactivated", "deactivated for"),
+        "activated": ("Team membership marked Active", "marked Active for"),
+        "deactivated": ("Team membership marked Inactive", "marked Inactive for"),
     }
     title, verb = labels[change]
     message = f"You have been {verb} {team.sport.name} - {team.get_gender_display()} {team.name}."
@@ -535,8 +535,8 @@ def parse_session_bulk_date(value):
 BULK_UPLOAD_TEMPLATES = {
     "sports": {
         "filename": "sports_bulk_upload_sample.xlsx",
-        "headers": ["Sport Name", "Description"],
-        "rows": [["Basketball", "Indoor and outdoor basketball training"]],
+        "headers": ["Sport Name", "Description", "Status"],
+        "rows": [["Basketball", "Indoor and outdoor basketball training", "Active"]],
     },
     "venues": {
         "filename": "venues_bulk_upload_sample.xlsx",
@@ -555,12 +555,12 @@ BULK_UPLOAD_TEMPLATES = {
     },
     "students": {
         "filename": "students_bulk_upload_sample.xlsx",
-        "headers": ["Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department", "Sport", "Team Type", "Team", "Gender", "Status"],
+        "headers": ["Student Name", "Student Email", "Mobile Number", "Reg No", "School", "Department", "Sport", "Team Type", "Gender", "Team", "Status"],
         "rows": [],
     },
     "trainers": {
         "filename": "trainers_bulk_upload_sample.xlsx",
-        "headers": ["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Team", "Gender"],
+        "headers": ["Trainer Name", "Trainer Email", "Mobile Number", "Reg No", "Sport", "Team Type", "Gender", "Team", "Status"],
         "rows": [],
     },
     "sessions": {
@@ -599,6 +599,37 @@ def _add_list_validation(sheet, formula, target, allow_blank=True):
     validation.showErrorMessage = True
     sheet.add_data_validation(validation)
     validation.add(target)
+
+
+def parse_active_inactive_status(value, default=True):
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return default
+    if normalized == "active":
+        return True
+    if normalized == "inactive":
+        return False
+    raise ValueError("Status must be Active or Inactive.")
+
+
+def _simple_status_bulk_workbook(kind):
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Sample"
+    headers = BULK_UPLOAD_TEMPLATES[kind]["headers"]
+    sheet.append(headers)
+    for row in BULK_UPLOAD_TEMPLATES[kind]["rows"]:
+        sheet.append(row)
+    for cell in sheet[1]:
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.fill = PatternFill("solid", fgColor="003366")
+        cell.alignment = Alignment(horizontal="center")
+    lookup = workbook.create_sheet("_Lookups")
+    _add_defined_list(workbook, lookup, "SimpleStatusesList", 1, ["Active", "Inactive"])
+    status_column = get_column_letter(headers.index("Status") + 1)
+    _add_list_validation(sheet, "=SimpleStatusesList", f"{status_column}2:{status_column}{SESSION_BULK_MAX_ROWS + 1}", False)
+    lookup.sheet_state = "hidden"
+    return workbook
 
 
 def _management_bulk_workbook(kind):
@@ -671,11 +702,12 @@ def _management_bulk_workbook(kind):
         sheet.column_dimensions[get_column_letter(helper_start)].hidden = True
         sheet.column_dimensions[get_column_letter(helper_start + 1)].hidden = True
         if kind == "students":
-            sport_col, type_col, team_col, gender_col = "G", "H", "I", "J"
+            sport_col, type_col, gender_col, team_col = "G", "H", "I", "J"
             _add_list_validation(sheet, "=MgmtSchoolsList", f"E2:E{SESSION_BULK_MAX_ROWS + 1}")
             _add_list_validation(sheet, "=MgmtStatusesList", f"K2:K{SESSION_BULK_MAX_ROWS + 1}", False)
         else:
-            sport_col, type_col, team_col, gender_col = "E", "F", "G", "H"
+            sport_col, type_col, gender_col, team_col = "E", "F", "G", "H"
+            _add_list_validation(sheet, "=MgmtStatusesList", f"I2:I{SESSION_BULK_MAX_ROWS + 1}", False)
         for row_number in range(2, SESSION_BULK_MAX_ROWS + 2):
             sheet.cell(row_number, helper_start, f'=IFERROR(VLOOKUP(${sport_col}{row_number},MgmtSportTypeMap,2,FALSE),"MgmtEmptyList")')
             sheet.cell(row_number, helper_start + 1, f'=IFERROR(VLOOKUP(${sport_col}{row_number}&"|"&${type_col}{row_number}&"|"&${gender_col}{row_number},MgmtTeamMap,2,FALSE),"MgmtEmptyList")')
@@ -1258,6 +1290,8 @@ def bulk_upload_sample(request, kind):
         workbook = build_sessions_bulk_upload_workbook()
     elif kind in {"teams", "students", "trainers"}:
         workbook = _management_bulk_workbook(kind)
+    elif kind in {"sports", "venues", "schools"}:
+        workbook = _simple_status_bulk_workbook(kind)
     else:
         workbook = Workbook()
         sheet = workbook.active
@@ -1276,12 +1310,18 @@ def bulk_upload_sample(request, kind):
 def import_sports_from_file(uploaded_file):
     created = 0
     errors = []
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         name = str(row.get("sport_name") or row.get("name") or "").strip()
         if not name:
             errors.append(f"Row {index}: Sport Name is required.")
             continue
-        Sport.objects.update_or_create(name=name, defaults={"description": str(row.get("description") or "").strip(), "is_active": True})
+        try:
+            is_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
+            continue
+        Sport.objects.update_or_create(name=name, defaults={"description": str(row.get("description") or "").strip(), "is_active": is_active})
         created += 1
     return created, errors
 
@@ -1289,14 +1329,20 @@ def import_sports_from_file(uploaded_file):
 def import_venues_from_file(uploaded_file):
     created = 0
     errors = []
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         name = str(row.get("venue_name") or row.get("name") or "").strip()
         if not name:
             errors.append(f"Row {index}: Venue Name is required.")
             continue
+        try:
+            is_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
+            continue
         Venue.objects.update_or_create(
             name=name,
-            defaults={"location": str(row.get("location") or "").strip(), "is_active": truthy_cell(row.get("status") or row.get("active"), True)},
+            defaults={"location": str(row.get("location") or "").strip(), "is_active": is_active},
         )
         created += 1
     return created, errors
@@ -1305,14 +1351,20 @@ def import_venues_from_file(uploaded_file):
 def import_schools_from_file(uploaded_file):
     created = 0
     errors = []
-    for index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+    for fallback_index, row in enumerate(read_bulk_upload_rows(uploaded_file), start=2):
+        index = row.get("__excel_row__", fallback_index)
         name = str(row.get("school_name") or row.get("name") or "").strip()
         if not name:
             errors.append(f"Row {index}: School Name is required.")
             continue
+        try:
+            is_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
+            continue
         School.objects.update_or_create(
             name=name,
-            defaults={"description": str(row.get("description") or "").strip(), "is_active": truthy_cell(row.get("status") or row.get("active"), True)},
+            defaults={"description": str(row.get("description") or "").strip(), "is_active": is_active},
         )
         created += 1
     return created, errors
@@ -1328,6 +1380,11 @@ def import_teams_from_file(uploaded_file):
         missing = missing_required(row, [("sport", "Sport"), ("team_name", "Team Name"), ("team_type", "Team Type"), ("gender", "Gender")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
+            continue
+        try:
+            is_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
             continue
         sport = Sport.objects.filter(name__iexact=sport_name, is_active=True).first()
         if not sport:
@@ -1379,7 +1436,7 @@ def import_teams_from_file(uploaded_file):
                 "captain": captain,
                 "vice_captain": vice_captain,
                 "coordinator": trainer,
-                "is_active": truthy_cell(row.get("status") or row.get("active"), True),
+                "is_active": is_active,
             },
         )
         created += 1
@@ -1394,6 +1451,11 @@ def import_students_from_file(uploaded_file, user=None):
         missing = missing_required(row, [("student_name", "Student Name"), ("student_email", "Student Email")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
+            continue
+        try:
+            new_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
             continue
         sport_name = str(row.get("sport") or "").strip()
         team_type = str(row.get("team_type") or "").strip()
@@ -1441,7 +1503,6 @@ def import_students_from_file(uploaded_file, user=None):
                     continue
                 membership, membership_created = Membership.objects.get_or_create(user=student, team=team)
                 was_active = membership.is_active
-                new_active = truthy_cell(row.get("status") or row.get("active"), True)
                 membership.is_active = new_active
                 membership.save(update_fields=["is_active", "updated_at"])
                 if new_active and membership_created:
@@ -1464,6 +1525,11 @@ def import_trainers_from_file(uploaded_file):
         missing = missing_required(row, [("trainer_name", "Trainer Name"), ("trainer_email", "Trainer Email")])
         if missing:
             errors.append(f"Row {index}: {', '.join(missing)} required.")
+            continue
+        try:
+            is_active = parse_active_inactive_status(row.get("status"), True)
+        except ValueError as exc:
+            errors.append(f"Row {index}: {exc}")
             continue
         email = str(row.get("trainer_email") or "").strip().lower()
         phone = str(row.get("mobile_number") or "").strip()
@@ -1516,6 +1582,10 @@ def import_trainers_from_file(uploaded_file):
         profile.phone = phone
         profile.register_no = str(row.get("reg_no") or row.get("register_no") or "").strip()
         profile.save(update_fields=["role", "phone", "register_no", "updated_at"])
+        set_user_account_status(
+            trainer,
+            UserProfile.AccountStatus.ACTIVE if is_active else UserProfile.AccountStatus.DEACTIVATED,
+        )
         if legacy_team_upload:
             team_ids = [team.pk for team in resolved_teams]
             Team.objects.filter(coordinator=trainer).exclude(pk__in=team_ids).update(coordinator=None)
@@ -1674,11 +1744,11 @@ def sports_list(request):
         elif action == "deactivate" and sport:
             sport.is_active = False
             sport.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{sport.name} deactivated.")
+            messages.success(request, f"{sport.name} marked Inactive.")
         elif action == "activate" and sport:
             sport.is_active = True
             sport.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{sport.name} activated.")
+            messages.success(request, f"{sport.name} marked Active.")
         elif action == "delete" and sport:
             sport_name = sport.name
             sport.delete()
@@ -1744,11 +1814,11 @@ def venues_list(request):
         elif action == "deactivate" and venue:
             venue.is_active = False
             venue.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{venue.name} deactivated.")
+            messages.success(request, f"{venue.name} marked Inactive.")
         elif action == "activate" and venue:
             venue.is_active = True
             venue.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{venue.name} activated.")
+            messages.success(request, f"{venue.name} marked Active.")
         elif action == "delete" and venue:
             venue_name = venue.name
             venue.delete()
@@ -1789,11 +1859,11 @@ def schools_list(request):
         elif action == "deactivate" and school:
             school.is_active = False
             school.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{school.name} deactivated.")
+            messages.success(request, f"{school.name} marked Inactive.")
         elif action == "activate" and school:
             school.is_active = True
             school.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{school.name} activated.")
+            messages.success(request, f"{school.name} marked Active.")
         elif action == "delete" and school:
             school_name = school.name
             school.delete()
@@ -1885,11 +1955,11 @@ def teams_list(request):
         elif action == "deactivate" and team:
             team.is_active = False
             team.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{team.name} deactivated.")
+            messages.success(request, f"{team.name} marked Inactive.")
         elif action == "activate" and team:
             team.is_active = True
             team.save(update_fields=["is_active", "updated_at"])
-            messages.success(request, f"{team.name} activated.")
+            messages.success(request, f"{team.name} marked Active.")
         elif action == "delete" and team:
             team_name = team.name
             team.delete()
@@ -2177,32 +2247,32 @@ def members_list(request):
             membership.is_active = False
             membership.save(update_fields=["is_active", "updated_at"])
             notify_team_membership_change(request.user, [membership.user], membership.team, "deactivated")
-            messages.success(request, "Member deactivated for this team.")
+            messages.success(request, "Member marked Inactive for this team.")
         elif action == "deactivate" and existing_user and role_for(request.user) in TRAINER_ROLES:
             memberships_to_deactivate = list(Membership.objects.filter(user=existing_user, team__in=allowed_teams, is_active=True).select_related("team", "team__sport"))
             Membership.objects.filter(user=existing_user, team__in=allowed_teams).update(is_active=False)
             set_user_account_status(existing_user, UserProfile.AccountStatus.DEACTIVATED, status_reason)
             for changed_membership in memberships_to_deactivate:
                 notify_team_membership_change(request.user, [existing_user], changed_membership.team, "deactivated")
-            messages.success(request, "Student deactivated for your assigned team(s).")
+            messages.success(request, "Student marked Inactive for your assigned team(s).")
         elif action == "deactivate" and existing_user and is_admin_user(request.user):
             set_user_account_status(existing_user, UserProfile.AccountStatus.DEACTIVATED, status_reason)
-            messages.success(request, "Student deactivated.")
+            messages.success(request, "Student marked Inactive.")
         elif action == "activate" and membership:
             membership.is_active = True
             membership.save(update_fields=["is_active", "updated_at"])
             notify_team_membership_change(request.user, [membership.user], membership.team, "activated")
-            messages.success(request, "Member activated for this team.")
+            messages.success(request, "Member marked Active for this team.")
         elif action == "activate" and existing_user and role_for(request.user) in TRAINER_ROLES:
             memberships_to_activate = list(Membership.objects.filter(user=existing_user, team__in=allowed_teams, is_active=False).select_related("team", "team__sport"))
             Membership.objects.filter(user=existing_user, team__in=allowed_teams).update(is_active=True)
             set_user_account_status(existing_user, UserProfile.AccountStatus.ACTIVE)
             for changed_membership in memberships_to_activate:
                 notify_team_membership_change(request.user, [existing_user], changed_membership.team, "activated")
-            messages.success(request, "Student activated for your assigned team(s).")
+            messages.success(request, "Student marked Active for your assigned team(s).")
         elif action == "activate" and existing_user and is_admin_user(request.user):
             set_user_account_status(existing_user, UserProfile.AccountStatus.ACTIVE)
-            messages.success(request, "Student activated.")
+            messages.success(request, "Student marked Active.")
         elif action == "delete" and membership:
             changed_team = membership.team
             changed_user = membership.user
@@ -2423,10 +2493,10 @@ def trainers_list(request):
                 messages.error(request, str(exc))
         elif action == "deactivate" and trainer:
             set_user_account_status(trainer, UserProfile.AccountStatus.DEACTIVATED, status_reason)
-            messages.success(request, "Trainer deactivated.")
+            messages.success(request, "Trainer marked Inactive.")
         elif action == "activate" and trainer:
             set_user_account_status(trainer, UserProfile.AccountStatus.ACTIVE)
-            messages.success(request, "Trainer activated.")
+            messages.success(request, "Trainer marked Active.")
         elif action == "delete" and trainer:
             trainer_name = trainer.get_full_name() or trainer.username
             set_user_account_status(trainer, UserProfile.AccountStatus.DELETED, status_reason)

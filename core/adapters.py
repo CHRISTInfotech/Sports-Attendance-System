@@ -44,7 +44,7 @@ class ChristGoogleAccountAdapter(DefaultSocialAccountAdapter):
         self._validate_university_email(request, email)
         user = get_user_model().objects.filter(email__iexact=email).first()
         if user and not user.is_active:
-            messages.error(request, "Your account is deactivated. Please contact the Sports Department admin.")
+            messages.error(request, "Your account is inactive. Please contact the Sports Department admin.")
             raise ImmediateHttpResponse(redirect("login"))
         if user and not sociallogin.is_existing:
             sociallogin.connect(request, user)

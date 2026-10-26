@@ -15,7 +15,7 @@ class TimeStampedModel(models.Model):
 class UserProfile(TimeStampedModel):
     class AccountStatus(models.TextChoices):
         ACTIVE = "ACTIVE", "Active"
-        DEACTIVATED = "DEACTIVATED", "Deactivated"
+        DEACTIVATED = "DEACTIVATED", "Inactive"
         DELETED = "DELETED", "Deleted"
 
     class Role(models.TextChoices):

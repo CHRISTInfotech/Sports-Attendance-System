@@ -42,7 +42,7 @@
                 <span class="text-muted">{{ trainer.assigned_sports_label }}</span>
               {% endif %}
             </td>
-            <td>{% if trainer.account_status == 'DEACTIVATED' %}<span class="badge text-bg-secondary">Deactivated</span>{% elif trainer.profile.role == 'TRAINER' or trainer.profile.role == 'COORDINATOR' %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-secondary">Inactive</span>{% endif %}</td>
+            <td>{% if trainer.account_status == 'DEACTIVATED' %}<span class="badge text-bg-secondary">Inactive</span>{% elif trainer.profile.role == 'TRAINER' or trainer.profile.role == 'COORDINATOR' %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-secondary">Inactive</span>{% endif %}</td>
             <td class="text-end">
               {% if trainer.is_readonly %}
                 <span class="badge text-bg-light">Read only</span>
@@ -59,7 +59,7 @@
                       data-email="{{ trainer.email }}"
                       data-mobile="{{ trainer.profile.phone|default:'-' }}"
                       data-register-no="{{ trainer.profile.register_no|default:'-' }}"
-                      data-status="{% if trainer.account_status == 'DEACTIVATED' %}Deactivated{% elif trainer.profile.role == 'TRAINER' or trainer.profile.role == 'COORDINATOR' %}Active{% else %}Inactive{% endif %}"
+                      data-status="{% if trainer.account_status == 'DEACTIVATED' %}Inactive{% elif trainer.profile.role == 'TRAINER' or trainer.profile.role == 'COORDINATOR' %}Active{% else %}Inactive{% endif %}"
                       data-sports="{{ trainer.assigned_sports_label }}"
                       data-assigned-sessions="{{ trainer.assigned_session_count }}"
                       data-marked-sessions="{{ trainer.marked_session_count }}"
@@ -83,8 +83,8 @@
                       <i class="bi bi-pencil"></i> Edit
                     </button>
                   </li>
-                  <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#trainerConfirmModal" data-action="deactivate" data-id="{{ trainer.pk }}" data-title="Deactivate Trainer" data-message="This will deactivate the trainer and move a copy to Deleted / Deactivated Users."><i class="bi bi-toggle-off"></i> Deactivate</button></li>
-                  <li><button class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#trainerConfirmModal" data-action="delete" data-id="{{ trainer.pk }}" data-title="Delete Trainer" data-message="This will move the trainer to Deleted / Deactivated Users as Deleted."><i class="bi bi-trash"></i> Delete</button></li>
+                  <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#trainerConfirmModal" data-action="deactivate" data-id="{{ trainer.pk }}" data-title="Mark Trainer Inactive" data-message="This will mark the trainer Inactive and copy the record to Deleted / Inactive Users."><i class="bi bi-toggle-off"></i> Mark Inactive</button></li>
+                  <li><button class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#trainerConfirmModal" data-action="delete" data-id="{{ trainer.pk }}" data-title="Delete Trainer" data-message="This will move the trainer to Deleted / Inactive Users as Deleted."><i class="bi bi-trash"></i> Delete</button></li>
                 </ul>
               </div>
               {% endif %}
