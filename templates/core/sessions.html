@@ -20,10 +20,11 @@
 
 <section class="panel mb-4">
   <form class="row g-3" method="get">
-    <div class="col-md-3">{{ form.sport.label_tag }}{{ form.sport }}</div>
-    <div class="col-md-3">{{ form.team.label_tag }}{{ form.team }}</div>
+    <div class="col-md-2">{{ form.sport.label_tag }}{{ form.sport }}</div>
+    <div class="col-md-2">{{ form.team.label_tag }}{{ form.team }}</div>
     <div class="col-md-2">{{ form.start_date.label_tag }}{{ form.start_date }}</div>
     <div class="col-md-2">{{ form.end_date.label_tag }}{{ form.end_date }}</div>
+    <div class="col-md-2"><label class="form-label" for="sessionRowsPerPage">Rows per page</label><select class="form-select" id="sessionRowsPerPage" name="rows_per_page" onchange="this.form.submit()"><option value="10"{% if rows_per_page == 10 %} selected{% endif %}>10</option><option value="25"{% if rows_per_page == 25 %} selected{% endif %}>25</option><option value="50"{% if rows_per_page == 50 %} selected{% endif %}>50</option><option value="100"{% if rows_per_page == 100 %} selected{% endif %}>100</option></select></div>
     <div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-primary w-100">Filter</button></div>
   </form>
 </section>
@@ -60,7 +61,7 @@
           <div class="dropdown">
             <button class="btn btn-sm btn-outline-secondary dropdown-toggle" data-bs-toggle="dropdown">More</button>
             <ul class="dropdown-menu dropdown-menu-end">
-              <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#sessionViewModal" data-title="{{ session.title|default:'Practice session' }}" data-team="{{ session.team.sport.name }} - {{ session.team.get_gender_display }} {{ session.team.name }}" data-start="{{ session.start_at|date:'d M Y' }}" data-end="{{ session.end_at|date:'d M Y' }}" data-time="{{ session.time_range_display }}" data-slot="{{ session.get_schedule_slot_display }}" data-full-day="{{ session.full_day|yesno:'Yes,No' }}" data-venue="{{ session.venue }}" data-scheduled-by="{{ session.scheduled_by_name|default:'-' }}" data-status="{% if session.status == 'CANCELLED' %}Cancelled{% elif session.attendance_submitted %}Completed{% else %}Pending{% endif %}" data-notes="{{ session.notes|default:'-' }}"><i class="bi bi-eye"></i> View</button></li>
+              <li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#sessionViewModal" data-title="{{ session.title|default:'Practice session' }}" data-team="{{ session.team.sport.name }} - {{ session.team.get_gender_display }} {{ session.team.name }}" data-start="{{ session.start_at|date:'d M Y' }}" data-end="{{ session.end_at|date:'d M Y' }}" data-time="{{ session.time_range_display }}" data-slot="{{ session.get_schedule_slot_display }}" data-full-day="{{ session.full_day|yesno:'Yes,No' }}" data-venue="{{ session.venue }}" data-scheduled-by="{{ session.scheduled_by_name|default:'-' }}" data-status="{% if session.status == 'CANCELLED' %}Cancelled{% elif session.attendance_submitted %}Completed{% else %}Pending{% endif %}" data-notes="{{ session.notes|default:'-' }}" data-cancellation-note="{{ session.cancellation_note|default:'-' }}"><i class="bi bi-eye"></i> View</button></li>
               {% if session.can_manage_for_user and session.status == 'CANCELLED' %}<li><button class="dropdown-item text-danger" data-bs-toggle="modal" data-bs-target="#sessionConfirmModal" data-action="archive" data-id="{{ session.pk }}" data-title="Delete Cancelled Session" data-message="This will move the cancelled practice session to Settings > Deleted Sessions."><i class="bi bi-trash"></i> Delete</button></li>{% endif %}
               {% if session.can_manage_for_user and session.status != 'CANCELLED' %}<li><button class="dropdown-item" data-bs-toggle="modal" data-bs-target="#sessionModal" data-mode="edit" data-id="{{ session.pk }}" data-team="{{ session.team_id }}" data-title="{{ session.title }}" data-start-date="{{ session.start_at|date:'Y-m-d' }}" data-end-date="{{ session.end_at|date:'Y-m-d' }}" data-from-time="{{ session.start_at|date:'H:i' }}" data-to-time="{{ session.end_at|date:'H:i' }}" data-full-day="{{ session.full_day|yesno:'true,false' }}" data-slot="{{ session.schedule_slot }}" data-venue="{% if session.venue == 'Other' %}OTHER{% elif session.venue|slice:':8' == 'Other - ' %}OTHER{% else %}{{ session.venue }}{% endif %}" data-other-venue="{% if session.venue|slice:':8' == 'Other - ' %}{{ session.venue|slice:'8:' }}{% endif %}" data-notes="{{ session.notes }}"><i class="bi bi-pencil"></i> Edit</button></li>{% endif %}
               {% if session.can_manage_for_user and session.status != 'CANCELLED' %}<li><a class="dropdown-item" href="{% url 'delegate_attendance' session.pk %}"><i class="bi bi-person-check"></i> Assign Session Incharge</a></li>{% endif %}
@@ -81,6 +82,18 @@
       <div class="empty-state">No sessions found. Use Schedule Practice to create the first session.</div>
     {% endfor %}
   </div>
+  {% if session_page.paginator.count %}
+    <div class="table-pagination mt-3">
+      <div class="table-pagination-summary">Showing {{ session_page.start_index }}-{{ session_page.end_index }} of {{ session_page.paginator.count }}</div>
+      <nav aria-label="Practice session pagination"><ul class="pagination pagination-sm mb-0">
+        <li class="page-item{% if not session_page.has_previous %} disabled{% endif %}"><a class="page-link"{% if session_page.has_previous %} href="{% querystring page=session_page.previous_page_number %}"{% endif %}>Previous</a></li>
+        {% for page_number in session_page.paginator.page_range %}
+          <li class="page-item{% if page_number == session_page.number %} active{% endif %}"><a class="page-link" href="{% querystring page=page_number %}">{{ page_number }}</a></li>
+        {% endfor %}
+        <li class="page-item{% if not session_page.has_next %} disabled{% endif %}"><a class="page-link"{% if session_page.has_next %} href="{% querystring page=session_page.next_page_number %}"{% endif %}>Next</a></li>
+      </ul></nav>
+    </div>
+  {% endif %}
 </section>
 
 {% if can_schedule_any %}
@@ -128,6 +141,7 @@
         <div><span>Scheduled By</span><strong data-field="view-scheduled-by"></strong></div>
         <div><span>Status</span><strong data-field="view-status"></strong></div>
         <div><span>Notes</span><strong data-field="view-notes"></strong></div>
+        <div><span>Cancellation Note</span><strong data-field="view-cancellation-note"></strong></div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
     </div>
@@ -141,7 +155,7 @@
       <input type="hidden" name="action" data-field="confirm-action">
       <input type="hidden" name="session_id" data-field="confirm-id">
       <div class="modal-header"><h5 class="modal-title">Confirm</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
-      <div class="modal-body"><p class="mb-0" data-field="confirm-message"></p></div>
+      <div class="modal-body"><p class="mb-3" data-field="confirm-message"></p><div data-cancellation-note-wrap class="d-none"><label class="form-label">Cancellation Note</label><textarea class="form-control" name="cancellation_note" data-field="cancellation-note" rows="3" placeholder="Enter the reason for cancellation"></textarea><div class="invalid-feedback">Cancellation Note is required.</div></div></div>
       <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-danger" type="submit">Confirm</button></div>
     </form>
   </div>
@@ -217,11 +231,29 @@
     modal.querySelector('[data-field="confirm-action"]').value = b.dataset.action;
     modal.querySelector('[data-field="confirm-id"]').value = b.dataset.id;
     modal.querySelector('[data-field="confirm-message"]').textContent = b.dataset.message;
+    const noteWrap = modal.querySelector('[data-cancellation-note-wrap]');
+    const note = modal.querySelector('[data-field="cancellation-note"]');
+    const requiresNote = b.dataset.action === 'cancel';
+    noteWrap.classList.toggle('d-none', !requiresNote);
+    note.required = requiresNote;
+    note.value = '';
+    note.classList.remove('is-invalid');
+  });
+  document.querySelector('#sessionConfirmModal form')?.addEventListener('submit', event => {
+    const action = event.currentTarget.querySelector('[data-field="confirm-action"]')?.value;
+    const note = event.currentTarget.querySelector('[data-field="cancellation-note"]');
+    const invalid = action === 'cancel' && !note?.value.trim();
+    note?.classList.toggle('is-invalid', invalid);
+    if (invalid) {
+      event.preventDefault();
+      event.stopPropagation();
+      note.focus();
+    }
   });
   document.getElementById('sessionViewModal')?.addEventListener('show.bs.modal', event => {
     const b = event.relatedTarget;
     const modal = event.currentTarget;
-    ['title','team','start','end','time','slot','fullDay','venue','scheduledBy','status','notes'].forEach(key => {
+    ['title','team','start','end','time','slot','fullDay','venue','scheduledBy','status','notes','cancellationNote'].forEach(key => {
       const field = modal.querySelector(`[data-field="view-${key.replace(/[A-Z]/g, m => '-' + m.toLowerCase())}"]`);
       if (field) field.textContent = b?.dataset[key] || '-';
     });

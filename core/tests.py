@@ -337,6 +337,31 @@ class TrainerStudentPermissionTests(TestCase):
         self.assertContains(response, "Deleted Session Details")
         self.assertContains(response, self.assigned_team.name)
 
+    def test_deleted_session_can_be_permanently_deleted_by_assigned_trainer(self):
+        from datetime import date
+
+        session = self.make_session("Recycle Practice", self.assigned_team, date(2026, 2, 4), status=Session.Status.CANCELLED)
+        session.is_deleted = True
+        session.save(update_fields=["is_deleted"])
+        self.client.force_login(self.trainer)
+
+        response = self.client.post(reverse("permanent_delete_session", args=[session.pk]))
+
+        self.assertRedirects(response, reverse("deleted_sessions"))
+        self.assertFalse(Session.all_objects.filter(pk=session.pk).exists())
+
+    def test_trainer_cannot_permanently_delete_other_teams_session(self):
+        from datetime import date
+
+        session = self.make_session("Other Recycle Practice", self.other_team, date(2026, 2, 5), status=Session.Status.CANCELLED)
+        session.is_deleted = True
+        session.save(update_fields=["is_deleted"])
+        self.client.force_login(self.trainer)
+
+        self.client.post(reverse("permanent_delete_session", args=[session.pk]))
+
+        self.assertTrue(Session.all_objects.filter(pk=session.pk).exists())
+
     def test_non_cancelled_session_cannot_be_moved_to_deleted_sessions(self):
         from datetime import date
 
@@ -390,6 +415,118 @@ class TrainerStudentPermissionTests(TestCase):
         response = self.client.get(reverse("deleted_meetings"))
         self.assertContains(response, meeting.title)
         self.assertContains(response, "Deleted Meeting Details")
+
+    def test_deleted_meeting_can_be_permanently_deleted(self):
+        from datetime import date, time
+
+        admin = self.make_user("delete-meeting-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        meeting = Meeting.all_objects.create(
+            title="Recycle Meeting",
+            meeting_date=date(2026, 3, 2),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            venue=self.venue.name,
+            scheduled_by=admin,
+            status=Meeting.Status.CANCELLED,
+            is_deleted=True,
+        )
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("permanent_delete_meeting", args=[meeting.pk]))
+
+        self.assertRedirects(response, reverse("deleted_meetings"))
+        self.assertFalse(Meeting.all_objects.filter(pk=meeting.pk).exists())
+
+    def test_meeting_cancellation_requires_non_whitespace_note(self):
+        from datetime import date, time
+
+        admin = self.make_user("cancel-meeting-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        meeting = Meeting.objects.create(
+            title="Upcoming Meeting",
+            meeting_date=date(2026, 4, 1),
+            start_time=time(10, 0),
+            end_time=time(11, 0),
+            venue=self.venue.name,
+            scheduled_by=admin,
+        )
+        self.client.force_login(admin)
+
+        for note in ("", "   "):
+            response = self.client.post(reverse("meetings"), {"action": "cancel", "meeting_id": meeting.pk, "ending_note": note})
+            self.assertRedirects(response, reverse("meetings"))
+            meeting.refresh_from_db()
+            self.assertEqual(meeting.status, Meeting.Status.SCHEDULED)
+
+        self.client.post(reverse("meetings"), {"action": "cancel", "meeting_id": meeting.pk, "ending_note": "Venue unavailable"})
+        meeting.refresh_from_db()
+        self.assertEqual(meeting.status, Meeting.Status.CANCELLED)
+        self.assertEqual(meeting.ending_note, "Venue unavailable")
+
+    def test_practice_cancellation_requires_non_whitespace_note(self):
+        from datetime import date
+
+        session = self.make_session("Note Required Practice", self.assigned_team, date(2026, 4, 2))
+        self.client.force_login(self.trainer)
+
+        for note in ("", "   "):
+            response = self.client.post(reverse("sessions"), {"action": "cancel", "session_id": session.pk, "cancellation_note": note})
+            self.assertRedirects(response, reverse("sessions"))
+            session.refresh_from_db()
+            self.assertEqual(session.status, Session.Status.SCHEDULED)
+
+        self.client.post(reverse("sessions"), {"action": "cancel", "session_id": session.pk, "cancellation_note": "Ground unavailable"})
+        session.refresh_from_db()
+        self.assertEqual(session.status, Session.Status.CANCELLED)
+        self.assertEqual(session.cancellation_note, "Ground unavailable")
+
+    def test_meeting_list_defaults_to_one_hundred_rows(self):
+        admin = self.make_user("meeting-table-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        self.client.force_login(admin)
+
+        response = self.client.get(reverse("meetings"))
+
+        self.assertContains(response, 'data-default-page-size="100"')
+
+    def test_practice_session_pagination_preserves_filters_and_rows_per_page(self):
+        from datetime import date, timedelta
+
+        admin = self.make_user("session-page-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        start = date(2026, 5, 1)
+        for index in range(12):
+            self.make_session(f"Paged Practice {index + 1}", self.assigned_team, start + timedelta(days=index))
+        self.client.force_login(admin)
+
+        response = self.client.get(reverse("sessions"), {
+            "sport": self.sport.pk,
+            "team": self.assigned_team.pk,
+            "rows_per_page": 10,
+            "page": 2,
+        })
+
+        self.assertEqual(response.context["session_page"].number, 2)
+        self.assertEqual(response.context["session_page"].paginator.count, 12)
+        self.assertEqual(len(response.context["sessions"]), 2)
+        self.assertContains(response, f"sport={self.sport.pk}")
+        self.assertContains(response, f"team={self.assigned_team.pk}")
+        self.assertContains(response, "rows_per_page=10")
+
+    def test_practice_session_pagination_defaults_to_one_hundred_and_shows_single_page_footer(self):
+        from datetime import date, timedelta
+
+        admin = self.make_user("session-footer-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        start = date(2026, 6, 1)
+        for index in range(6):
+            self.make_session(f"Footer Practice {index + 1}", self.assigned_team, start + timedelta(days=index))
+        self.client.force_login(admin)
+
+        response = self.client.get(reverse("sessions"), {"sport": self.sport.pk})
+
+        self.assertEqual(response.context["rows_per_page"], 100)
+        self.assertEqual(response.context["session_page"].paginator.per_page, 100)
+        self.assertContains(response, "Showing 1-6 of 6")
+        self.assertContains(response, ">Previous</a>", html=False)
+        self.assertContains(response, ">1</a>", html=False)
+        self.assertContains(response, ">Next</a>", html=False)
 
     def test_profile_photo_upload_is_saved_and_rendered(self):
         image_bytes = (

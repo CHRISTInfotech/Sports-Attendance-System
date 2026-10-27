@@ -5,6 +5,7 @@ from io import BytesIO
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Q
 from django.http import HttpResponse
@@ -761,7 +762,7 @@ def build_sessions_bulk_upload_workbook():
             "No",
             active_venues[0] if active_venues else "Other",
             "",
-            "Replace this example with the practice details",
+            "NA",
         ])
 
     next_column = 1
@@ -2610,6 +2611,22 @@ def deleted_sessions(request):
 
 
 @login_required
+def permanent_delete_session(request, pk):
+    if not (is_admin_user(request.user) or role_for(request.user) in TRAINER_ROLES):
+        messages.error(request, "You cannot delete sessions.")
+        return redirect("settings")
+    session = get_object_or_404(Session.all_objects.select_related("team"), pk=pk, is_deleted=True)
+    if not is_admin_user(request.user) and session.team.coordinator_id != request.user.pk:
+        messages.error(request, "You cannot delete this session.")
+        return redirect("deleted_sessions")
+    if request.method == "POST":
+        session_title = session.title or "Practice session"
+        session.delete()
+        messages.success(request, f"{session_title} permanently deleted.")
+    return redirect("deleted_sessions")
+
+
+@login_required
 @role_required(*ADMIN_ROLES)
 def deleted_meetings(request):
     meetings = Meeting.all_objects.filter(is_deleted=True).prefetch_related(
@@ -2619,6 +2636,17 @@ def deleted_meetings(request):
     for meeting in meetings:
         meeting.deleted_by_name = user_label(meeting.deleted_by) if meeting.deleted_by else "-"
     return render(request, "core/deleted_meetings.html", {"meetings": meetings})
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+def permanent_delete_meeting(request, pk):
+    meeting = get_object_or_404(Meeting.all_objects, pk=pk, is_deleted=True)
+    if request.method == "POST":
+        meeting_title = meeting.title
+        meeting.delete()
+        messages.success(request, f"{meeting_title} permanently deleted.")
+    return redirect("deleted_meetings")
 
 
 @login_required
@@ -2769,15 +2797,21 @@ def sessions_list(request):
             if session.attendance_submitted:
                 messages.error(request, "Completed practice sessions cannot be cancelled.")
             else:
+                cancellation_note = request.POST.get("cancellation_note", "").strip()
+                if not cancellation_note:
+                    messages.error(request, "Cancellation Note is required to cancel a practice session.")
+                    return redirect("sessions")
                 cancelled_title = session.title or "Practice session"
                 cancelled_team = session.team
                 session.status = Session.Status.CANCELLED
+                session.cancellation_note = cancellation_note
                 session.attendance_started_by = None
                 session.attendance_started_by_role = ""
                 session.attendance_started_at = None
                 session.attendance_lock_expires_at = None
                 session.save(update_fields=[
                     "status",
+                    "cancellation_note",
                     "attendance_started_by",
                     "attendance_started_by_role",
                     "attendance_started_at",
@@ -2787,7 +2821,7 @@ def sessions_list(request):
                 notify_practice_session(
                     session,
                     "Practice session cancelled",
-                    f"{cancelled_title} cancelled for {cancelled_team}.",
+                    f"{cancelled_title} cancelled for {cancelled_team}. Reason: {cancellation_note}",
                     actor=request.user,
                     teams=[cancelled_team],
                     include_session=False,
@@ -2840,7 +2874,14 @@ def sessions_list(request):
     if not is_admin_user(request.user):
         team_qs = team_qs.filter(coordinator=request.user)
     can_schedule_any = is_admin_user(request.user) or (role_for(request.user) in TRAINER_ROLES and team_qs.exists())
-    session_list = add_session_permissions(request.user, sessions)
+    try:
+        rows_per_page = int(request.GET.get("rows_per_page", 100))
+    except (TypeError, ValueError):
+        rows_per_page = 100
+    if rows_per_page not in {10, 25, 50, 100}:
+        rows_per_page = 100
+    session_page = Paginator(sessions, rows_per_page).get_page(request.GET.get("page"))
+    session_list = add_session_permissions(request.user, session_page.object_list)
     venues = Venue.objects.filter(is_active=True).order_by("name")
     return render(request, "core/sessions.html", {
         "sessions": session_list,
@@ -2849,6 +2890,8 @@ def sessions_list(request):
         "venues": venues,
         "can_schedule_any": can_schedule_any,
         "session_stats": session_stats,
+        "session_page": session_page,
+        "rows_per_page": rows_per_page,
     })
 
 
@@ -3016,6 +3059,9 @@ def meetings_list(request):
             agenda = meeting.agenda
             participants = list(meeting.participants.filter(is_active=True))
             ending_note = request.POST.get("ending_note", "").strip()
+            if not ending_note:
+                messages.error(request, "Cancellation Note is required to cancel a meeting.")
+                return redirect("meetings")
             meeting.status = Meeting.Status.CANCELLED
             meeting.ending_note = ending_note
             meeting.save(update_fields=["status", "ending_note", "updated_at"])

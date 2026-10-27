@@ -17,7 +17,7 @@
 
 <section class="panel">
   <div class="section-title"><h2>Meeting List</h2><span class="small text-muted">Latest first</span></div>
-  {% include "core/meeting_table.html" with meetings=meetings meeting_details_modal_id="meetingDetailsModal" can_manage_meetings=can_schedule_meeting %}
+  {% include "core/meeting_table.html" with meetings=meetings meeting_details_modal_id="meetingDetailsModal" can_manage_meetings=can_schedule_meeting meeting_default_page_size="100" %}
 </section>
 
 {% if can_schedule_meeting %}
@@ -167,6 +167,7 @@
         <p class="mb-3" data-field="confirm-message"></p>
         <label class="form-label" data-field="ending-note-label">Ending Note</label>
         <textarea class="form-control" name="ending_note" data-field="ending-note" rows="3" placeholder="Add a note for this meeting action"></textarea>
+        <div class="invalid-feedback">Cancellation Note is required.</div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-danger" type="submit">Confirm</button></div>
     </form>
@@ -451,7 +452,22 @@
     modal.querySelector('[data-field="confirm-id"]').value = button?.dataset.id || '';
     modal.querySelector('[data-field="confirm-message"]').textContent = button?.dataset.message || 'Confirm this action.';
     modal.querySelector('[data-field="ending-note-label"]').textContent = button?.dataset.noteLabel || 'Ending Note';
-    modal.querySelector('[data-field="ending-note"]').value = '';
+    const note = modal.querySelector('[data-field="ending-note"]');
+    const requiresNote = button?.dataset.action === 'cancel';
+    note.value = '';
+    note.required = requiresNote;
+    note.classList.remove('is-invalid');
+  });
+  document.querySelector('#meetingConfirmModal form')?.addEventListener('submit', event => {
+    const action = event.currentTarget.querySelector('[data-field="confirm-action"]')?.value;
+    const note = event.currentTarget.querySelector('[data-field="ending-note"]');
+    const invalid = action === 'cancel' && !note?.value.trim();
+    note?.classList.toggle('is-invalid', invalid);
+    if (invalid) {
+      event.preventDefault();
+      event.stopPropagation();
+      note.focus();
+    }
   });
   document.getElementById('meetingForm')?.addEventListener('submit', event => {
     if (!validateMeetingForm(event.currentTarget)) {

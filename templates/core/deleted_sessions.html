@@ -32,6 +32,7 @@
                 data-deleted-at="{{ session.deleted_at|date:'d M Y, h:i A' }}" data-notes="{{ session.notes|default:'-' }}">
                 <i class="bi bi-eye"></i> View
               </button>
+              <button class="btn btn-sm btn-outline-danger" data-bs-toggle="modal" data-bs-target="#deleteSessionModal" data-id="{{ session.pk }}" data-title="{{ session.title|default:'Practice session' }}"><i class="bi bi-trash"></i> Delete</button>
             </td>
           </tr>
         {% empty %}
@@ -62,6 +63,17 @@
     </div>
   </div>
 </div>
+
+<div class="modal fade" id="deleteSessionModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <form class="modal-content" method="post" data-delete-form>
+      {% csrf_token %}
+      <div class="modal-header"><h5 class="modal-title">Permanently Delete Session</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"><p class="mb-0">Permanently delete <strong data-delete-title></strong>? This action cannot be undone.</p></div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-danger" type="submit">Delete Permanently</button></div>
+    </form>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -73,6 +85,11 @@
       const target = modal.querySelector(`[data-field="${field}"]`);
       if (target) target.textContent = button?.dataset[field.replace(/-([a-z])/g, (_, letter) => letter.toUpperCase())] || '-';
     });
+  });
+  document.getElementById('deleteSessionModal')?.addEventListener('show.bs.modal', event => {
+    const button = event.relatedTarget;
+    event.currentTarget.querySelector('[data-delete-title]').textContent = button?.dataset.title || 'this session';
+    event.currentTarget.querySelector('[data-delete-form]').action = `{% url 'permanent_delete_session' 0 %}`.replace('/0/', `/${button.dataset.id}/`);
   });
 </script>
 {% endblock %}

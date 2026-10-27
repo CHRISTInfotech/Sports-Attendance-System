@@ -171,6 +171,7 @@ class Session(TimeStampedModel):
     attendance_started_at = models.DateTimeField(null=True, blank=True)
     attendance_lock_expires_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
+    cancellation_note = models.TextField(blank=True)
     is_deleted = models.BooleanField(default=False)
     deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(
