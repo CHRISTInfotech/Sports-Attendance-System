@@ -1281,6 +1281,15 @@ def create_student_from_access_request(access_request):
     return user
 
 
+def approve_login_access_request(access_request, reviewer):
+    validate_christ_email(access_request.email)
+    access_request.status = LoginAccessRequest.Status.APPROVED
+    access_request.reviewed_by = reviewer
+    access_request.reviewed_at = timezone.now()
+    access_request.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
+    return create_student_from_access_request(access_request)
+
+
 @login_required
 def bulk_upload_sample(request, kind):
     template = BULK_UPLOAD_TEMPLATES.get(kind)
@@ -2109,6 +2118,42 @@ def members_list(request):
     allowed_teams = trainer_assigned_teams(request.user)
     if can_manage_students and request.method == "POST":
         action = request.POST.get("action")
+        if action == "bulk_approve_requests":
+            if not is_admin_user(request.user):
+                messages.error(request, "You cannot manage login requests.")
+                return redirect("members")
+            selected_ids = {
+                int(request_id)
+                for request_id in request.POST.getlist("selected_request_ids")
+                if str(request_id).isdigit()
+            }
+            if not selected_ids:
+                messages.error(request, "Select at least one pending login request to approve.")
+                return redirect("members")
+            approved_count = 0
+            failed = []
+            for request_id in selected_ids:
+                request_label = f"Request {request_id}"
+                try:
+                    with transaction.atomic():
+                        access_request = LoginAccessRequest.objects.select_for_update().filter(pk=request_id).first()
+                        if not access_request:
+                            raise ValueError("Request was not found.")
+                        request_label = access_request.email
+                        if access_request.status != LoginAccessRequest.Status.PENDING:
+                            raise ValueError("Request is no longer pending.")
+                        approve_login_access_request(access_request, request.user)
+                    approved_count += 1
+                except (ValueError, TypeError) as exc:
+                    failed.append(f"{request_label}: {exc}")
+                except Exception:
+                    failed.append(f"{request_label}: approval could not be completed.")
+            if approved_count:
+                messages.success(request, f"{approved_count} login request(s) approved successfully.")
+            if failed:
+                messages.error(request, f"{len(failed)} request(s) could not be approved. {' '.join(failed)}")
+            return redirect("members")
+
         request_id = request.POST.get("request_id")
         access_request = get_object_or_404(LoginAccessRequest, pk=request_id) if request_id else None
         if action in {"approve_request", "reject_request"} and access_request:
@@ -2122,12 +2167,13 @@ def members_list(request):
                     messages.error(request, str(exc))
                     return redirect("members")
             with transaction.atomic():
-                access_request.status = LoginAccessRequest.Status.APPROVED if action == "approve_request" else LoginAccessRequest.Status.REJECTED
-                access_request.reviewed_by = request.user
-                access_request.reviewed_at = timezone.now()
-                access_request.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
                 if action == "approve_request":
-                    create_student_from_access_request(access_request)
+                    approve_login_access_request(access_request, request.user)
+                else:
+                    access_request.status = LoginAccessRequest.Status.REJECTED
+                    access_request.reviewed_by = request.user
+                    access_request.reviewed_at = timezone.now()
+                    access_request.save(update_fields=["status", "reviewed_by", "reviewed_at", "updated_at"])
             message = "approved and added to Add Students" if action == "approve_request" else "rejected"
             messages.success(request, f"{access_request.email} {message}.")
             return redirect("members")
@@ -2362,6 +2408,7 @@ def members_list(request):
         "schools": schools,
         "team_types": Team.TeamType.choices,
         "login_requests": login_requests,
+        "pending_login_requests_count": login_requests.filter(status=LoginAccessRequest.Status.PENDING).count() if is_admin_user(request.user) else 0,
         "can_manage_students": can_manage_students,
         "is_admin_user": is_admin_user(request.user),
         "registration_numbers": registration_numbers,

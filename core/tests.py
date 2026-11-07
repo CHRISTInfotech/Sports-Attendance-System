@@ -2,19 +2,23 @@ from io import BytesIO
 from datetime import datetime
 import os
 import tempfile
+from types import SimpleNamespace
 
+from allauth.core.exceptions import ImmediateHttpResponse
+from django.contrib.messages.storage.fallback import FallbackStorage
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.test import override_settings
 from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.management import call_command
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.urls import reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
-from .models import AttendanceRecord, EmailNotificationJob, Meeting, Membership, School, Session, Sport, Team, UserProfile, Venue
+from .models import AttendanceRecord, EmailNotificationJob, LoginAccessRequest, Meeting, Membership, School, Session, Sport, Team, UserProfile, Venue
 from .views import (
     _management_bulk_workbook,
     _simple_status_bulk_workbook,
@@ -29,9 +33,102 @@ from .views import (
     read_bulk_upload_rows,
 )
 from .email_notifications import queue_notification_emails, send_notification_emails
+from .adapters import ChristGoogleAccountAdapter
 
 
 User = get_user_model()
+
+
+class LoginApprovalWorkflowTests(TestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.adapter = ChristGoogleAccountAdapter()
+        self.admin = User.objects.create_user(
+            username="workflow-admin@christuniversity.in",
+            email="workflow-admin@christuniversity.in",
+            password="pass",
+            is_superuser=True,
+            is_staff=True,
+        )
+        self.admin.profile.role = UserProfile.Role.SUPER_ADMIN
+        self.admin.profile.save(update_fields=["role", "updated_at"])
+
+    def adapter_request(self):
+        request = self.factory.get("/accounts/google/login/callback/")
+        SessionMiddleware(lambda current_request: None).process_request(request)
+        request.session.save()
+        request._messages = FallbackStorage(request)
+        return request
+
+    def social_login(self, email, full_name="Returning Student"):
+        first_name, _, last_name = full_name.partition(" ")
+        sociallogin = SimpleNamespace(
+            user=SimpleNamespace(email=email, first_name=first_name, last_name=last_name),
+            account=SimpleNamespace(extra_data={"email": email, "name": full_name}),
+            email_addresses=[],
+            is_existing=False,
+            connect=Mock(),
+        )
+        return sociallogin
+
+    def test_soft_deleted_user_remains_blocked_by_google_login(self):
+        email = "inactive.workflow@christuniversity.in"
+        student = User.objects.create_user(username=email, email=email)
+        student.is_active = False
+        student.save(update_fields=["is_active"])
+        student.profile.account_status = UserProfile.AccountStatus.DEACTIVATED
+        student.profile.save(update_fields=["account_status", "updated_at"])
+        LoginAccessRequest.objects.create(email=email, status=LoginAccessRequest.Status.APPROVED)
+
+        with self.assertRaises(ImmediateHttpResponse):
+            self.adapter.pre_social_login(self.adapter_request(), self.social_login(email))
+
+        self.assertFalse(User.objects.get(pk=student.pk).is_active)
+        self.assertEqual(LoginAccessRequest.objects.get(email=email).status, LoginAccessRequest.Status.APPROVED)
+
+    def test_permanently_deleted_user_requires_new_approval_before_login(self):
+        email = "deleted.workflow@law.christuniversity.in"
+        student = User.objects.create_user(username=email, email=email, first_name="Deleted", last_name="Student")
+        student.profile.role = UserProfile.Role.MEMBER
+        student.profile.account_status = UserProfile.AccountStatus.DELETED
+        student.profile.save(update_fields=["role", "account_status", "updated_at"])
+        access_request = LoginAccessRequest.objects.create(
+            email=email,
+            full_name="Deleted Student",
+            status=LoginAccessRequest.Status.APPROVED,
+            reviewed_by=self.admin,
+            reviewed_at=timezone.now(),
+        )
+        self.client.force_login(self.admin)
+
+        self.client.post(reverse("permanent_delete_user", args=[student.pk]))
+
+        self.assertFalse(User.objects.filter(email=email).exists())
+        with self.assertRaises(ImmediateHttpResponse):
+            self.adapter.is_open_for_signup(self.adapter_request(), self.social_login(email, "Deleted Student"))
+
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, LoginAccessRequest.Status.PENDING)
+        self.assertIsNone(access_request.reviewed_by)
+        self.assertIsNone(access_request.reviewed_at)
+        self.assertEqual(LoginAccessRequest.objects.filter(email=email).count(), 1)
+        self.assertFalse(User.objects.filter(email=email).exists())
+
+        response = self.client.post(reverse("members"), {
+            "action": "approve_request",
+            "request_id": access_request.pk,
+        })
+        self.assertRedirects(response, reverse("members"))
+        access_request.refresh_from_db()
+        recreated_user = User.objects.get(email=email)
+        self.assertEqual(access_request.status, LoginAccessRequest.Status.APPROVED)
+        self.assertEqual(recreated_user.profile.role, UserProfile.Role.MEMBER)
+        self.assertEqual(User.objects.filter(email=email).count(), 1)
+
+        sociallogin = self.social_login(email, "Deleted Student")
+        self.adapter.pre_social_login(self.adapter_request(), sociallogin)
+        sociallogin.connect.assert_called_once()
+        self.assertEqual(sociallogin.user, recreated_user)
 
 
 @override_settings(
@@ -157,6 +254,81 @@ class TrainerStudentPermissionTests(TestCase):
 
         self.assertContains(response, self.assigned_student.email)
         self.assertNotContains(response, self.other_student.email)
+
+    def test_admin_can_bulk_approve_only_selected_pending_login_requests(self):
+        admin = self.make_user("approval-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        first = LoginAccessRequest.objects.create(email="first.request@christuniversity.in", full_name="First Request")
+        second = LoginAccessRequest.objects.create(email="second.request@law.christuniversity.in", full_name="Second Request")
+        rejected = LoginAccessRequest.objects.create(
+            email="rejected.request@christuniversity.in",
+            full_name="Rejected Request",
+            status=LoginAccessRequest.Status.REJECTED,
+        )
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("members"), {
+            "action": "bulk_approve_requests",
+            "selected_request_ids": [str(first.pk), str(first.pk), str(second.pk), str(rejected.pk)],
+        }, follow=True)
+
+        first.refresh_from_db()
+        second.refresh_from_db()
+        rejected.refresh_from_db()
+        self.assertEqual(first.status, LoginAccessRequest.Status.APPROVED)
+        self.assertEqual(second.status, LoginAccessRequest.Status.APPROVED)
+        self.assertEqual(rejected.status, LoginAccessRequest.Status.REJECTED)
+        self.assertEqual(first.reviewed_by, admin)
+        self.assertTrue(User.objects.filter(email=first.email, profile__role=UserProfile.Role.MEMBER).exists())
+        self.assertTrue(User.objects.filter(email=second.email, profile__role=UserProfile.Role.MEMBER).exists())
+        self.assertEqual(User.objects.filter(email=first.email).count(), 1)
+        self.assertContains(response, "2 login request(s) approved successfully.")
+        self.assertContains(response, "1 request(s) could not be approved.")
+        self.assertEqual(list(response.context["login_requests"].values_list("pk", flat=True)), [rejected.pk])
+
+    def test_bulk_login_approval_reports_invalid_email_without_blocking_valid_request(self):
+        admin = self.make_user("partial-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        valid = LoginAccessRequest.objects.create(email="valid.request@christuniversity.in", full_name="Valid Request")
+        invalid = LoginAccessRequest.objects.create(email="invalid.request@gmail.com", full_name="Invalid Request")
+        self.client.force_login(admin)
+
+        response = self.client.post(reverse("members"), {
+            "action": "bulk_approve_requests",
+            "selected_request_ids": [valid.pk, invalid.pk],
+        }, follow=True)
+
+        valid.refresh_from_db()
+        invalid.refresh_from_db()
+        self.assertEqual(valid.status, LoginAccessRequest.Status.APPROVED)
+        self.assertEqual(invalid.status, LoginAccessRequest.Status.PENDING)
+        self.assertFalse(User.objects.filter(email=invalid.email).exists())
+        self.assertContains(response, "1 login request(s) approved successfully.")
+        self.assertContains(response, "1 request(s) could not be approved.")
+
+    def test_trainer_cannot_bulk_approve_login_requests(self):
+        access_request = LoginAccessRequest.objects.create(email="blocked.request@christuniversity.in")
+        self.client.force_login(self.trainer)
+
+        response = self.client.post(reverse("members"), {
+            "action": "bulk_approve_requests",
+            "selected_request_ids": [access_request.pk],
+        }, follow=True)
+
+        access_request.refresh_from_db()
+        self.assertEqual(access_request.status, LoginAccessRequest.Status.PENDING)
+        self.assertContains(response, "You cannot manage login requests.")
+
+    def test_login_requests_page_has_bulk_selection_controls_for_pending_requests(self):
+        admin = self.make_user("controls-admin@christuniversity.in", UserProfile.Role.SUPER_ADMIN)
+        pending = LoginAccessRequest.objects.create(email="controls.request@christuniversity.in")
+        LoginAccessRequest.objects.create(email="controls.rejected@christuniversity.in", status=LoginAccessRequest.Status.REJECTED)
+        self.client.force_login(admin)
+
+        response = self.client.get(reverse("members"))
+
+        self.assertContains(response, 'id="selectAllLoginRequests"')
+        self.assertContains(response, 'id="approveSelectedRequestsButton"')
+        self.assertContains(response, f'value="{pending.pk}" form="bulkApprovalForm"')
+        self.assertContains(response, "1 Pending")
 
     def test_trainer_can_add_student_only_to_assigned_team(self):
         self.client.force_login(self.trainer)

@@ -73,7 +73,21 @@ class ChristGoogleAccountAdapter(DefaultSocialAccountAdapter):
             defaults={"full_name": full_name, "status": LoginAccessRequest.Status.PENDING},
         )
         if access_request.status == LoginAccessRequest.Status.APPROVED:
-            return True
+            # An approved request always creates a user in the admin approval
+            # transaction. If that user no longer exists, the approval belongs
+            # to a permanently deleted account and must not authorize signup.
+            access_request.status = LoginAccessRequest.Status.PENDING
+            access_request.reviewed_by = None
+            access_request.reviewed_at = None
+            if full_name:
+                access_request.full_name = full_name
+            access_request.save(update_fields=[
+                "status",
+                "reviewed_by",
+                "reviewed_at",
+                "full_name",
+                "updated_at",
+            ])
         if access_request.status == LoginAccessRequest.Status.REJECTED:
             messages.error(request, "Your Sportix: sports attendance login request was rejected. Please contact the Sports Department.")
             raise ImmediateHttpResponse(redirect("login"))
