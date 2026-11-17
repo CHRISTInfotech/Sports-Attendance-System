@@ -85,7 +85,7 @@
   <div class="section-title"><h2>Student List</h2>{% if is_admin_user %}<div class="dropdown"><button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown"><i class="bi bi-download"></i> Download</button><ul class="dropdown-menu dropdown-menu-end"><li><button class="dropdown-item" type="button" data-student-export="excel"><i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)</button></li><li><button class="dropdown-item" type="button" data-student-export="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF (.pdf)</button></li></ul></div>{% endif %}</div>
   {% if is_admin_user %}<form method="post" action="{% url 'export_students' %}" id="studentExportForm" class="d-none">{% csrf_token %}<input type="hidden" name="format" data-export-format><input type="hidden" name="student_ids" data-export-student-ids></form>{% endif %}
   <div class="table-responsive">
-    <table class="table align-middle data-table" data-default-page-size="100" id="studentListTable">
+    <table class="table align-middle data-table" data-default-page-size="100" data-reset-filters="true" id="studentListTable">
       <thead><tr><th data-filter="false">Student</th><th data-filter="false">Email</th><th data-filter="false">Mobile</th><th data-filter="false">Reg No</th><th>School</th><th>Department</th><th data-filter-label="Sports">Team</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for row in student_rows %}

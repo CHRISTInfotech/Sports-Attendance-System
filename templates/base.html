@@ -226,6 +226,18 @@
         holder.innerHTML = `<label class="form-label" for="${id}">${filterLabel}</label><select id="${id}" class="form-select form-select-sm" data-column="${columnIndex}"><option value="">Select ${filterLabel}</option>${uniqueValues.map(value => `<option value="${value.replaceAll('"', '&quot;')}">${value}</option>`).join('')}</select>`;
         tools.appendChild(holder);
       });
+      if (table.dataset.resetFilters === 'true') {
+        const resetHolder = document.createElement('div');
+        resetHolder.className = 'table-tools-reset';
+        resetHolder.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary" data-reset-table-filters title="Reset filters"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>';
+        resetHolder.querySelector('button').addEventListener('click', () => {
+          tools.querySelector('input[type="search"]').value = '';
+          tools.querySelectorAll('select[data-column]').forEach(select => { select.value = ''; });
+          currentPage = 1;
+          applyTableState();
+        });
+        tools.appendChild(resetHolder);
+      }
       wrapper.parentNode.insertBefore(tools, wrapper);
       const mobileCards = document.createElement('div');
       mobileCards.className = 'mobile-table-cards';
