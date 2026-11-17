@@ -18,7 +18,7 @@ from django.urls import reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
-from .models import AttendanceRecord, EmailNotificationJob, LoginAccessRequest, Meeting, Membership, School, Session, Sport, Team, UserProfile, Venue
+from .models import AttendanceRecord, EmailNotificationJob, LoginAccessRequest, Meeting, Membership, School, Session, Sport, StudentSport, Team, UserProfile, Venue
 from .views import (
     _management_bulk_workbook,
     _simple_status_bulk_workbook,
@@ -70,6 +70,122 @@ class LoginApprovalWorkflowTests(TestCase):
             connect=Mock(),
         )
         return sociallogin
+
+    def signup_payload(self, school, sports, **overrides):
+        payload = {
+            "student_name": "Signup Student",
+            "email": "signup.student@msds.christuniversity.in",
+            "mobile_number": "9876543210",
+            "register_no": "REG-SIGNUP-1",
+            "school": school.pk,
+            "department": "Data Science",
+            "gender": "Female",
+            "sports": [sport.pk for sport in sports],
+        }
+        payload.update(overrides)
+        return payload
+
+    def test_login_page_defaults_to_google_and_includes_signup_tab(self):
+        response = self.client.get(reverse("login"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Google Login")
+        self.assertContains(response, "Signup Request")
+        self.assertContains(response, "First-time student?")
+        self.assertEqual(response.context["active_login_tab"], "google")
+
+    def test_signup_request_stores_details_and_does_not_create_user(self):
+        school = School.objects.create(name="School of Sciences")
+        cricket = Sport.objects.create(name="Cricket")
+        football = Sport.objects.create(name="Football")
+
+        response = self.client.post(reverse("student_signup_request"), self.signup_payload(school, [cricket, football]))
+
+        self.assertRedirects(response, reverse("login"))
+        access_request = LoginAccessRequest.objects.get(email="signup.student@msds.christuniversity.in")
+        self.assertEqual(access_request.status, LoginAccessRequest.Status.PENDING)
+        self.assertEqual(access_request.full_name, "Signup Student")
+        self.assertEqual(access_request.phone, "9876543210")
+        self.assertEqual(access_request.register_no, "REG-SIGNUP-1")
+        self.assertEqual(access_request.school, school)
+        self.assertEqual(access_request.department, "Data Science")
+        self.assertEqual(access_request.gender, "Female")
+        self.assertSetEqual(set(access_request.sports.all()), {cricket, football})
+        self.assertFalse(User.objects.filter(email=access_request.email).exists())
+
+        with self.assertRaises(ImmediateHttpResponse):
+            self.adapter.is_open_for_signup(self.adapter_request(), self.social_login(access_request.email, access_request.full_name))
+
+    def test_duplicate_and_invalid_signup_requests_are_rejected(self):
+        school = School.objects.create(name="School of Law")
+        sport = Sport.objects.create(name="Basketball")
+        payload = self.signup_payload(school, [sport])
+        self.client.post(reverse("student_signup_request"), payload)
+
+        duplicate_response = self.client.post(reverse("student_signup_request"), payload)
+        invalid_response = self.client.post(reverse("student_signup_request"), self.signup_payload(
+            school,
+            [sport],
+            email="student@gmail.com",
+            register_no="REG-OTHER",
+            mobile_number="123",
+        ))
+
+        self.assertEqual(duplicate_response.status_code, 200)
+        self.assertContains(duplicate_response, "Your details/request have already been submitted.")
+        self.assertEqual(invalid_response.status_code, 200)
+        self.assertContains(invalid_response, "Please sign in with your Christ University Google account.")
+        self.assertContains(invalid_response, "Mobile number must be exactly 10 digits.")
+        self.assertEqual(LoginAccessRequest.objects.count(), 1)
+
+    def test_registration_number_duplicate_is_rejected_for_signup(self):
+        school = School.objects.create(name="School of Commerce")
+        sport = Sport.objects.create(name="Volleyball")
+        existing = User.objects.create_user(username="existing@christuniversity.in", email="existing@christuniversity.in")
+        existing.profile.register_no = "REG-USED"
+        existing.profile.save(update_fields=["register_no", "updated_at"])
+
+        response = self.client.post(reverse("student_signup_request"), self.signup_payload(school, [sport], register_no="reg-used"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "This registration number already exists")
+        self.assertFalse(LoginAccessRequest.objects.exists())
+
+    def test_admin_can_review_and_approve_full_signup_request(self):
+        school = School.objects.create(name="School of Engineering")
+        cricket = Sport.objects.create(name="Cricket")
+        hockey = Sport.objects.create(name="Hockey")
+        payload = self.signup_payload(school, [cricket, hockey])
+        self.client.post(reverse("student_signup_request"), payload)
+        access_request = LoginAccessRequest.objects.get(email=payload["email"])
+        self.client.force_login(self.admin)
+
+        details_response = self.client.get(reverse("members"))
+        self.assertContains(details_response, "View Details")
+        self.assertContains(details_response, "REG-SIGNUP-1")
+        self.assertContains(details_response, "School of Engineering")
+        self.assertContains(details_response, "Cricket, Hockey")
+
+        approval_response = self.client.post(reverse("members"), {"action": "approve_request", "request_id": access_request.pk})
+
+        self.assertRedirects(approval_response, reverse("members"))
+        access_request.refresh_from_db()
+        student = User.objects.get(email=payload["email"])
+        self.assertEqual(access_request.status, LoginAccessRequest.Status.APPROVED)
+        self.assertEqual(student.get_full_name(), "Signup Student")
+        self.assertEqual(student.profile.role, UserProfile.Role.MEMBER)
+        self.assertEqual(student.profile.phone, "9876543210")
+        self.assertEqual(student.profile.register_no, "REG-SIGNUP-1")
+        self.assertEqual(student.profile.school, school)
+        self.assertEqual(student.profile.department, "Data Science")
+        self.assertEqual(student.profile.gender, "Female")
+        self.assertSetEqual(set(StudentSport.objects.filter(user=student, is_active=True).values_list("sport_id", flat=True)), {cricket.pk, hockey.pk})
+        self.assertFalse(Membership.objects.filter(user=student).exists())
+
+        sociallogin = self.social_login(student.email, student.get_full_name())
+        self.adapter.pre_social_login(self.adapter_request(), sociallogin)
+        sociallogin.connect.assert_called_once()
+        self.assertEqual(sociallogin.user, student)
 
     def test_soft_deleted_user_remains_blocked_by_google_login(self):
         email = "inactive.workflow@christuniversity.in"

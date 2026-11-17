@@ -53,6 +53,12 @@ class LoginAccessRequest(TimeStampedModel):
 
     email = models.EmailField(unique=True)
     full_name = models.CharField(max_length=180, blank=True)
+    phone = models.CharField(max_length=20, blank=True)
+    register_no = models.CharField(max_length=60, blank=True)
+    school = models.ForeignKey("School", on_delete=models.SET_NULL, null=True, blank=True, related_name="login_requests")
+    department = models.CharField(max_length=120, blank=True)
+    gender = models.CharField(max_length=30, blank=True)
+    sports = models.ManyToManyField("Sport", related_name="student_signup_requests", blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     requested_at = models.DateTimeField(auto_now_add=True)
     reviewed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="login_requests_reviewed")
@@ -73,6 +79,19 @@ class Sport(TimeStampedModel):
 
     def __str__(self):
         return self.name
+
+
+class StudentSport(TimeStampedModel):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sport_associations")
+    sport = models.ForeignKey(Sport, on_delete=models.CASCADE, related_name="student_associations")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        unique_together = ("user", "sport")
+        ordering = ["sport__name"]
+
+    def __str__(self):
+        return f"{self.user} - {self.sport}"
 
 
 class School(TimeStampedModel):

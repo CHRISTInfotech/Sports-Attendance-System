@@ -49,6 +49,14 @@
     <table class="table align-middle data-table">
       <thead><tr><th>Sport</th><th>Team</th><th>Type</th><th>Status</th></tr></thead>
       <tbody>
+        {% for association in sport_associations %}
+          <tr>
+            <td>{{ association.sport.name }}</td>
+            <td><span class="text-muted">Not assigned</span></td>
+            <td>-</td>
+            <td><span class="badge text-bg-success">Active</span></td>
+          </tr>
+        {% endfor %}
         {% for membership in memberships %}
           <tr>
             <td>{{ membership.team.sport.name }}</td>
@@ -56,9 +64,9 @@
             <td>{{ membership.team.get_team_type_display }}</td>
             <td>{% if membership.is_active %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-secondary">Inactive</span>{% endif %}</td>
           </tr>
-        {% empty %}
+        {% empty %}{% if not sport_associations %}
           <tr><td colspan="4" class="empty-state">No team assignment found.</td></tr>
-        {% endfor %}
+        {% endif %}{% endfor %}
       </tbody>
     </table>
   </div>

@@ -36,6 +36,7 @@
             <td><span class="badge {% if request_item.status == 'REJECTED' %}text-bg-danger{% else %}text-bg-warning{% endif %}">{{ request_item.get_status_display }}</span></td>
             <td>{{ request_item.requested_at|date:"d M Y, h:i A" }}</td>
             <td class="text-end">
+              <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#loginRequestDetailsModal" data-request-name="{{ request_item.full_name|default:'-' }}" data-request-email="{{ request_item.email }}" data-request-mobile="{{ request_item.phone|default:'-' }}" data-request-register="{{ request_item.register_no|default:'-' }}" data-request-school="{{ request_item.school.name|default:'-' }}" data-request-department="{{ request_item.department|default:'-' }}" data-request-gender="{{ request_item.gender|default:'-' }}" data-request-sports="{% for sport in request_item.sports.all %}{{ sport.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}" data-request-status="{{ request_item.get_status_display }}" data-requested-at="{{ request_item.requested_at|date:'d M Y, h:i A' }}"><i class="bi bi-eye"></i> View Details</button>
               <form class="d-inline" method="post">{% csrf_token %}<input type="hidden" name="request_id" value="{{ request_item.pk }}"><input type="hidden" name="action" value="approve_request"><button class="btn btn-sm btn-primary">Approve</button></form>
               {% if request_item.status != 'REJECTED' %}
                 <form class="d-inline" method="post">{% csrf_token %}<input type="hidden" name="request_id" value="{{ request_item.pk }}"><input type="hidden" name="action" value="reject_request"><button class="btn btn-sm btn-outline-secondary">Reject</button></form>
@@ -58,6 +59,26 @@
     </div>
   </div>
 </div>
+<div class="modal fade" id="loginRequestDetailsModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Signup Request Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body detail-list">
+        <div><span>Student Name</span><strong data-request-detail="name"></strong></div>
+        <div><span>Email</span><strong data-request-detail="email"></strong></div>
+        <div><span>Mobile Number</span><strong data-request-detail="mobile"></strong></div>
+        <div><span>Registration Number</span><strong data-request-detail="register"></strong></div>
+        <div><span>School</span><strong data-request-detail="school"></strong></div>
+        <div><span>Department</span><strong data-request-detail="department"></strong></div>
+        <div><span>Gender</span><strong data-request-detail="gender"></strong></div>
+        <div><span>Selected Sports</span><strong data-request-detail="sports"></strong></div>
+        <div><span>Status</span><strong data-request-detail="status"></strong></div>
+        <div><span>Requested</span><strong data-request-detail="requested-at"></strong></div>
+      </div>
+      <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Close</button></div>
+    </div>
+  </div>
+</div>
 {% endif %}
 
 <section class="panel">
@@ -74,7 +95,7 @@
             <td>{{ row.user.profile.register_no|default:"-" }}</td>
             <td>{{ row.user.profile.school.name|default:"-" }}</td>
             <td>{{ row.user.profile.department|default:"-" }}</td>
-            <td>{% if row.assigned_team_labels %}{{ row.assigned_team_labels }}{% else %}<span class="text-muted">Not assigned</span>{% endif %}</td>
+            <td>{% if row.assigned_team_labels %}{{ row.assigned_team_labels }}{% elif row.assigned_sport_labels %}{{ row.assigned_sport_labels }} <span class="text-muted">(Team not assigned)</span>{% else %}<span class="text-muted">Not assigned</span>{% endif %}</td>
             <td>{% if row.account_status == 'DEACTIVATED' %}<span class="badge text-bg-secondary">Inactive</span>{% elif row.is_active %}<span class="badge text-bg-success">Active</span>{% else %}<span class="badge text-bg-secondary">Inactive</span>{% endif %}</td>
             <td class="text-end">
               {% if row.is_readonly %}
@@ -252,6 +273,15 @@
     syncBulkLoginRequestControls();
   });
   syncBulkLoginRequestControls();
+
+  document.getElementById('loginRequestDetailsModal')?.addEventListener('show.bs.modal', event => {
+    const trigger = event.relatedTarget;
+    if (!trigger) return;
+    ['name', 'email', 'mobile', 'register', 'school', 'department', 'gender', 'sports', 'status', 'requested-at'].forEach(field => {
+      const target = event.currentTarget.querySelector(`[data-request-detail="${field}"]`);
+      if (target) target.textContent = trigger.dataset[`request${field.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`] || '-';
+    });
+  });
 
   const registrationNumbers = JSON.parse(document.getElementById('registration-number-data')?.textContent || '[]');
 

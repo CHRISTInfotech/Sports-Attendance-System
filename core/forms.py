@@ -4,7 +4,7 @@ from django.db.models import Q
 from django.utils import timezone
 from datetime import datetime, time
 
-from .models import AttendanceRecord, Feedback, Membership, School, Session, Sport, Team, UserProfile, Venue
+from .models import AttendanceRecord, Feedback, LoginAccessRequest, Membership, School, Session, Sport, Team, UserProfile, Venue
 from .email_validation import INVALID_CHRIST_EMAIL_MESSAGE, validate_christ_email
 
 User = get_user_model()
@@ -59,6 +59,53 @@ class BootstrapFormMixin:
                 if choices and choices[0][0] not in {"", None}:
                     placeholder = self.select_placeholders.get(field_name, f"Select {field.label}")
                     field.choices = [("", placeholder)] + choices
+
+
+class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
+    student_name = forms.CharField(max_length=180, label="Student Name")
+    email = forms.EmailField(label="Email")
+    mobile_number = forms.CharField(max_length=10, label="Mobile Number")
+    register_no = forms.CharField(max_length=60, label="Registration Number")
+    school = forms.ModelChoiceField(queryset=School.objects.none())
+    department = forms.CharField(max_length=120)
+    gender = forms.ChoiceField(choices=[("", "Select Gender"), ("Male", "Male"), ("Female", "Female")])
+    sports = forms.ModelMultipleChoiceField(queryset=Sport.objects.none())
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["school"].queryset = School.objects.filter(is_active=True).order_by("name")
+        self.fields["sports"].queryset = Sport.objects.filter(is_active=True).order_by("name")
+        self.fields["email"].widget.attrs.update({
+            "pattern": r"^[^@\s]+@([A-Za-z0-9-]+\.)*christuniversity\.in$",
+            "title": "Use a Christ University email ending with christuniversity.in",
+        })
+        self.fields["mobile_number"].widget.attrs.update({"inputmode": "numeric", "pattern": r"[0-9]{10}", "maxlength": "10"})
+
+    def clean_email(self):
+        try:
+            email = validate_christ_email(self.cleaned_data["email"])
+        except ValueError:
+            raise forms.ValidationError(INVALID_CHRIST_EMAIL_MESSAGE)
+        if User.objects.filter(email__iexact=email).exists():
+            raise forms.ValidationError("An account already exists for this email. Please continue with Google login.")
+        existing_request = LoginAccessRequest.objects.filter(email__iexact=email).first()
+        if existing_request:
+            if existing_request.status == LoginAccessRequest.Status.APPROVED:
+                raise forms.ValidationError("This request is already approved. Please continue with Google login.")
+            raise forms.ValidationError("Your details/request have already been submitted.")
+        return email
+
+    def clean_mobile_number(self):
+        value = str(self.cleaned_data.get("mobile_number") or "").strip()
+        if not value.isdigit() or len(value) != 10:
+            raise forms.ValidationError("Mobile number must be exactly 10 digits.")
+        return value
+
+    def clean_register_no(self):
+        value = str(self.cleaned_data.get("register_no") or "").strip()
+        if UserProfile.objects.filter(register_no__iexact=value).exists() or LoginAccessRequest.objects.filter(register_no__iexact=value).exists():
+            raise forms.ValidationError(REGISTRATION_NUMBER_EXISTS_MESSAGE)
+        return value
 
 
 class SportForm(BootstrapFormMixin, forms.ModelForm):

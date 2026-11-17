@@ -815,6 +815,32 @@ img.avatar {
   padding: .9rem 1rem;
 }
 
+.login-panel-auth {
+  width: min(720px, calc(100% - 2rem));
+}
+
+.login-tabs .nav-link {
+  color: rgba(255, 255, 255, 0.72);
+  border-color: transparent;
+}
+
+.login-tabs .nav-link.active {
+  color: var(--primary, #003366);
+  background: #fff;
+}
+
+.login-panel-auth .form-label {
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 600;
+  margin-bottom: 0.35rem;
+}
+
+.signup-sports-dropdown .dropdown-menu {
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
 .data-table {
   min-width: 760px;
 }

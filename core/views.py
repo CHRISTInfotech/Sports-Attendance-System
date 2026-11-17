@@ -6,7 +6,7 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Q
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
@@ -33,6 +33,7 @@ from .forms import (
     SessionFeedbackForm,
     SessionForm,
     SportForm,
+    StudentSignupRequestForm,
     TeamForm,
     VenueForm,
 )
@@ -51,6 +52,7 @@ from .models import (
     School,
     Session,
     Sport,
+    StudentSport,
     Team,
     UserProfile,
     Venue,
@@ -87,7 +89,44 @@ def login_page(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     google_configured = SocialApp.objects.filter(provider="google", sites__id=1).exists()
-    return render(request, "account/login.html", {"google_configured": google_configured})
+    return render(request, "account/login.html", {
+        "google_configured": google_configured,
+        "signup_form": StudentSignupRequestForm(),
+        "signup_selected_sports": [],
+        "active_login_tab": "google",
+    })
+
+
+def student_signup_request(request):
+    if request.user.is_authenticated:
+        return redirect("dashboard")
+    google_configured = SocialApp.objects.filter(provider="google", sites__id=1).exists()
+    form = StudentSignupRequestForm(request.POST or None)
+    if request.method == "POST" and form.is_valid():
+        try:
+            with transaction.atomic():
+                access_request = LoginAccessRequest.objects.create(
+                    email=form.cleaned_data["email"],
+                    full_name=form.cleaned_data["student_name"].strip(),
+                    phone=form.cleaned_data["mobile_number"],
+                    register_no=form.cleaned_data["register_no"],
+                    school=form.cleaned_data["school"],
+                    department=form.cleaned_data["department"].strip(),
+                    gender=form.cleaned_data["gender"],
+                    status=LoginAccessRequest.Status.PENDING,
+                )
+                access_request.sports.set(form.cleaned_data["sports"])
+        except IntegrityError:
+            form.add_error("email", "Your details/request have already been submitted.")
+        else:
+            messages.success(request, "Your signup request has been submitted and is pending Admin approval.")
+            return redirect("login")
+    return render(request, "account/login.html", {
+        "google_configured": google_configured,
+        "signup_form": form,
+        "signup_selected_sports": request.POST.getlist("sports"),
+        "active_login_tab": "signup",
+    })
 
 
 @login_required
@@ -1265,19 +1304,34 @@ def build_student_from_post(request, existing_user=None):
 def create_student_from_access_request(access_request):
     email = validate_christ_email(access_request.email)
     user = User.objects.filter(email__iexact=email).first()
-    if user is None:
-        user = User(username=email, email=email)
-        user.set_unusable_password()
-    user.email = email
-    user.username = email
-    if access_request.full_name:
-        parts = access_request.full_name.split(" ", 1)
-        user.first_name = parts[0]
-        user.last_name = parts[1] if len(parts) > 1 else ""
-    user.save()
-    profile, _ = UserProfile.objects.get_or_create(user=user)
-    profile.role = UserProfile.Role.MEMBER
-    profile.save(update_fields=["role", "updated_at"])
+    if access_request.register_no:
+        validate_unique_register_no(access_request.register_no, user)
+        user = save_student_record(
+            access_request.full_name,
+            email,
+            access_request.school,
+            access_request.department,
+            access_request.phone,
+            access_request.register_no,
+            access_request.gender,
+            existing_user=user,
+        )
+    else:
+        if user is None:
+            user = User(username=email, email=email)
+            user.set_unusable_password()
+        user.email = email
+        user.username = email
+        if access_request.full_name:
+            parts = access_request.full_name.split(" ", 1)
+            user.first_name = parts[0]
+            user.last_name = parts[1] if len(parts) > 1 else ""
+        user.save()
+        profile, _ = UserProfile.objects.get_or_create(user=user)
+        profile.role = UserProfile.Role.MEMBER
+        profile.save(update_fields=["role", "updated_at"])
+    for sport in access_request.sports.all():
+        StudentSport.objects.update_or_create(user=user, sport=sport, defaults={"is_active": True})
     return user
 
 
@@ -1767,14 +1821,6 @@ def sports_list(request):
 
     sports = Sport.objects.annotate(
         team_count=Count("teams", distinct=True),
-        player_count=Count(
-            "teams__memberships__user",
-            filter=Q(
-                teams__memberships__is_active=True,
-                teams__memberships__user__profile__role=UserProfile.Role.MEMBER,
-            ),
-            distinct=True,
-        ),
         marked_session_count=Count(
             "teams__sessions",
             filter=Q(teams__sessions__attendance_submitted=True),
@@ -1783,6 +1829,17 @@ def sports_list(request):
     ).order_by("name")
     for sport in sports:
         sport.icon_class = sport_icon_class(sport.name)
+        team_player_ids = set(Membership.objects.filter(
+            team__sport=sport,
+            is_active=True,
+            user__profile__role=UserProfile.Role.MEMBER,
+        ).values_list("user_id", flat=True))
+        direct_player_ids = set(StudentSport.objects.filter(
+            sport=sport,
+            is_active=True,
+            user__profile__role=UserProfile.Role.MEMBER,
+        ).values_list("user_id", flat=True))
+        sport.player_count = len(team_player_ids | direct_player_ids)
     trainer_count = User.objects.filter(
         profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR],
         is_active=True,
@@ -2351,6 +2408,7 @@ def members_list(request):
     assigned_sport_labels_by_user = {}
     assigned_team_types_by_user = {}
     assigned_team_type_labels_by_user = {}
+    active_sport_by_user = {}
     active_membership_by_user = {}
     first_membership_by_user = {}
     team_type_labels = dict(Team.TeamType.choices)
@@ -2367,6 +2425,11 @@ def members_list(request):
         assigned_sport_labels_by_user.setdefault(assigned_membership.user_id, set()).add(assigned_membership.team.sport.name)
         assigned_team_types_by_user.setdefault(assigned_membership.user_id, set()).add(assigned_membership.team.team_type)
         assigned_team_type_labels_by_user.setdefault(assigned_membership.user_id, set()).add(team_type_labels.get(assigned_membership.team.team_type, assigned_membership.team.team_type))
+    if is_admin_user(request.user):
+        for association in StudentSport.objects.filter(is_active=True).select_related("sport", "user"):
+            assigned_sport_ids_by_user.setdefault(association.user_id, set()).add(str(association.sport_id))
+            assigned_sport_labels_by_user.setdefault(association.user_id, set()).add(association.sport.name)
+            active_sport_by_user[association.user_id] = True
     student_rows = []
     for user_id, membership in first_membership_by_user.items():
         assigned_user_ids.add(user_id)
@@ -2377,7 +2440,7 @@ def members_list(request):
             "team": None,
             "account_status": account_status,
             "is_readonly": account_status == UserProfile.AccountStatus.DEACTIVATED,
-            "is_active": account_status == UserProfile.AccountStatus.ACTIVE and active_membership_by_user.get(user_id, False),
+            "is_active": account_status == UserProfile.AccountStatus.ACTIVE and (active_membership_by_user.get(user_id, False) or active_sport_by_user.get(user_id, False)),
             "assigned_team_ids": ",".join(assigned_team_ids_by_user.get(user_id, [])),
             "assigned_team_labels": "; ".join(assigned_team_labels_by_user.get(user_id, [])),
             "assigned_sport_ids": ",".join(sorted(assigned_sport_ids_by_user.get(user_id, set()))),
@@ -2389,7 +2452,7 @@ def members_list(request):
         unassigned_students = User.objects.filter(profile__role=UserProfile.Role.MEMBER).exclude(profile__account_status=UserProfile.AccountStatus.DELETED).exclude(pk__in=assigned_user_ids).select_related("profile").order_by("first_name", "last_name", "email")
         for student in unassigned_students:
             account_status = user_account_status(student)
-            student_rows.append({"membership": None, "user": student, "team": None, "account_status": account_status, "is_readonly": account_status == UserProfile.AccountStatus.DEACTIVATED, "is_active": account_status == UserProfile.AccountStatus.ACTIVE, "assigned_team_ids": "", "assigned_team_labels": "", "assigned_sport_ids": "", "assigned_sport_labels": "", "assigned_team_types": "", "assigned_team_type_labels": ""})
+            student_rows.append({"membership": None, "user": student, "team": None, "account_status": account_status, "is_readonly": account_status == UserProfile.AccountStatus.DEACTIVATED, "is_active": account_status == UserProfile.AccountStatus.ACTIVE, "assigned_team_ids": "", "assigned_team_labels": "", "assigned_sport_ids": ",".join(sorted(assigned_sport_ids_by_user.get(student.pk, set()))), "assigned_sport_labels": ", ".join(sorted(assigned_sport_labels_by_user.get(student.pk, set()))), "assigned_team_types": "", "assigned_team_type_labels": ""})
     student_rows.sort(key=lambda row: (row["account_status"] == UserProfile.AccountStatus.DEACTIVATED, (row["user"].get_full_name() or row["user"].email or row["user"].username).lower()))
     teams = allowed_teams.select_related("sport").order_by("sport__name", "name")
     sports = Sport.objects.filter(teams__in=allowed_teams, is_active=True).distinct().order_by("name")
@@ -2398,7 +2461,7 @@ def members_list(request):
         "total": len(student_rows),
         "active": sum(1 for row in student_rows if row["account_status"] == UserProfile.AccountStatus.ACTIVE and row["is_active"]),
     }
-    login_requests = LoginAccessRequest.objects.exclude(status=LoginAccessRequest.Status.APPROVED).order_by("status", "-requested_at") if is_admin_user(request.user) else []
+    login_requests = LoginAccessRequest.objects.exclude(status=LoginAccessRequest.Status.APPROVED).select_related("school").prefetch_related("sports").order_by("status", "-requested_at") if is_admin_user(request.user) else []
     registration_numbers = list(UserProfile.objects.exclude(register_no="").values("user_id", "register_no"))
     return render(request, "core/members.html", {
         "memberships": memberships,
@@ -2423,11 +2486,13 @@ def member_detail(request, pk):
         messages.error(request, "You cannot view this student.")
         return redirect("members")
     memberships = Membership.objects.filter(user=student).select_related("team", "team__sport")
+    sport_associations = StudentSport.objects.filter(user=student, is_active=True).select_related("sport")
     records = AttendanceRecord.objects.filter(member=student).select_related("session", "session__team", "session__team__sport", "marked_by")
     if not is_admin_user(request.user):
         allowed_teams = trainer_assigned_teams(request.user)
         memberships = memberships.filter(team__in=allowed_teams)
         records = records.filter(session__team__in=allowed_teams)
+        sport_associations = sport_associations.filter(sport__teams__in=allowed_teams).distinct()
     total_records = records.count()
     attended_records = records.filter(status__in=[
         AttendanceRecord.Status.PRESENT,
@@ -2436,7 +2501,9 @@ def member_detail(request, pk):
     ]).count()
     attendance_percent = round((attended_records / total_records) * 100, 1) if total_records else None
     attendance_sport_stats = []
-    sport_ids = set(memberships.values_list("team__sport_id", flat=True))
+    membership_sport_ids = set(memberships.values_list("team__sport_id", flat=True))
+    sport_ids = membership_sport_ids | set(sport_associations.values_list("sport_id", flat=True))
+    sport_associations = sport_associations.exclude(sport_id__in=membership_sport_ids)
     for sport in Sport.objects.filter(pk__in=sport_ids).order_by("name"):
         sport_records = records.filter(session__team__sport=sport)
         sport_total = sport_records.count()
@@ -2459,6 +2526,7 @@ def member_detail(request, pk):
     return render(request, "core/member_detail.html", {
         "student": student,
         "memberships": memberships,
+        "sport_associations": sport_associations,
         "records": records,
         "attendance_percent": attendance_percent,
         "attendance_total": total_records,
@@ -2733,7 +2801,9 @@ def my_profile(request):
         ]
     else:
         profile_memberships = Membership.objects.filter(user=request.user, is_active=True).select_related("team", "team__sport").order_by("team__sport__name", "team__gender", "team__name")
-        associated_sports_count = Sport.objects.filter(teams__memberships__user=request.user, teams__memberships__is_active=True).distinct().count()
+        direct_sports = StudentSport.objects.filter(user=request.user, is_active=True).select_related("sport").order_by("sport__name")
+        membership_sport_ids = set(profile_memberships.values_list("team__sport_id", flat=True))
+        associated_sports_count = len(membership_sport_ids | set(direct_sports.values_list("sport_id", flat=True)))
         associated_team_count = profile_memberships.count()
         for membership in profile_memberships:
             role_label = ""
@@ -2745,6 +2815,9 @@ def my_profile(request):
                 "label": f"{membership.team.sport.name} - {membership.team.get_gender_display()} {membership.team.name}",
                 "role": role_label,
             })
+        for association in direct_sports:
+            if association.sport_id not in membership_sport_ids:
+                profile_associations.append({"label": association.sport.name, "role": ""})
     return render(request, "core/my_profile.html", {
         "form": form,
         "profile_associations": profile_associations,
