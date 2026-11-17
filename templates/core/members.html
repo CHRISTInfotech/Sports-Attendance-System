@@ -82,13 +82,14 @@
 {% endif %}
 
 <section class="panel">
-  <div class="section-title"><h2>Student List</h2><span class="small text-muted">Registered and assigned students</span></div>
+  <div class="section-title"><h2>Student List</h2>{% if is_admin_user %}<div class="dropdown"><button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown"><i class="bi bi-download"></i> Download</button><ul class="dropdown-menu dropdown-menu-end"><li><button class="dropdown-item" type="button" data-student-export="excel"><i class="bi bi-file-earmark-excel"></i> Excel (.xlsx)</button></li><li><button class="dropdown-item" type="button" data-student-export="pdf"><i class="bi bi-file-earmark-pdf"></i> PDF (.pdf)</button></li></ul></div>{% endif %}</div>
+  {% if is_admin_user %}<form method="post" action="{% url 'export_students' %}" id="studentExportForm" class="d-none">{% csrf_token %}<input type="hidden" name="format" data-export-format><input type="hidden" name="student_ids" data-export-student-ids></form>{% endif %}
   <div class="table-responsive">
-    <table class="table align-middle data-table" data-default-page-size="100">
+    <table class="table align-middle data-table" data-default-page-size="100" id="studentListTable">
       <thead><tr><th data-filter="false">Student</th><th data-filter="false">Email</th><th data-filter="false">Mobile</th><th data-filter="false">Reg No</th><th>School</th><th>Department</th><th data-filter-label="Sports">Team</th><th>Status</th><th class="text-end">Actions</th></tr></thead>
       <tbody>
         {% for row in student_rows %}
-          <tr>
+          <tr data-student-id="{{ row.user.pk }}">
             <td><strong>{{ row.user.get_full_name|default:row.user.username }}</strong></td>
             <td>{{ row.user.email }}</td>
             <td>{{ row.user.profile.phone|default:"-" }}</td>
@@ -280,6 +281,34 @@
     ['name', 'email', 'mobile', 'register', 'school', 'department', 'gender', 'sports', 'status', 'requested-at'].forEach(field => {
       const target = event.currentTarget.querySelector(`[data-request-detail="${field}"]`);
       if (target) target.textContent = trigger.dataset[`request${field.split('-').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('')}`] || '-';
+    });
+  });
+
+  function filteredStudentIds() {
+    const table = document.getElementById('studentListTable');
+    const wrapper = table?.closest('.table-responsive');
+    const tools = wrapper?.previousElementSibling;
+    if (!table || !tools?.classList.contains('table-tools')) return [];
+    const query = (tools.querySelector('input[type="search"]')?.value || '').trim().toLowerCase();
+    const filters = Array.from(tools.querySelectorAll('select[data-column]')).map(select => ({ column: Number(select.dataset.column), value: select.value }));
+    return Array.from(table.querySelectorAll('tbody tr[data-student-id]')).filter(row => {
+      const matchesSearch = !query || row.textContent.toLowerCase().includes(query);
+      const matchesFilters = filters.every(filter => {
+        const cell = row.children[filter.column];
+        const value = (cell?.dataset.filterValue || cell?.textContent || '').trim();
+        return !filter.value || value === filter.value;
+      });
+      return matchesSearch && matchesFilters;
+    }).map(row => row.dataset.studentId);
+  }
+
+  document.querySelectorAll('[data-student-export]').forEach(button => {
+    button.addEventListener('click', () => {
+      const form = document.getElementById('studentExportForm');
+      if (!form) return;
+      form.querySelector('[data-export-format]').value = button.dataset.studentExport;
+      form.querySelector('[data-export-student-ids]').value = filteredStudentIds().join(',');
+      form.submit();
     });
   });
 

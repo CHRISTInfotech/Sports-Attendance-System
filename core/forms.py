@@ -62,14 +62,14 @@ class BootstrapFormMixin:
 
 
 class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
-    student_name = forms.CharField(max_length=180, label="Student Name")
-    email = forms.EmailField(label="Email")
-    mobile_number = forms.CharField(max_length=10, label="Mobile Number")
-    register_no = forms.CharField(max_length=60, label="Registration Number")
-    school = forms.ModelChoiceField(queryset=School.objects.none())
-    department = forms.CharField(max_length=120)
-    gender = forms.ChoiceField(choices=[("", "Select Gender"), ("Male", "Male"), ("Female", "Female")])
-    sports = forms.ModelMultipleChoiceField(queryset=Sport.objects.none())
+    student_name = forms.CharField(max_length=180, label="Student Name", error_messages={"required": "Student name is required."})
+    email = forms.EmailField(label="Email", error_messages={"required": "Email is required.", "invalid": "Enter a valid email address."})
+    mobile_number = forms.CharField(max_length=10, label="Mobile Number", error_messages={"required": "Mobile number is required."})
+    register_no = forms.CharField(max_length=60, label="Registration Number", error_messages={"required": "Registration number is required."})
+    school = forms.ModelChoiceField(queryset=School.objects.none(), error_messages={"required": "Select a school.", "invalid_choice": "Select a valid school."})
+    department = forms.CharField(max_length=120, error_messages={"required": "Department is required."})
+    gender = forms.ChoiceField(choices=[("", "Select Gender"), ("Male", "Male"), ("Female", "Female")], error_messages={"required": "Select a gender.", "invalid_choice": "Select a valid gender."})
+    sports = forms.ModelMultipleChoiceField(queryset=Sport.objects.none(), error_messages={"required": "Select at least one sport.", "invalid_choice": "Select valid sports."})
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -80,6 +80,11 @@ class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
             "title": "Use a Christ University email ending with christuniversity.in",
         })
         self.fields["mobile_number"].widget.attrs.update({"inputmode": "numeric", "pattern": r"[0-9]{10}", "maxlength": "10"})
+        if self.is_bound:
+            for field_name in self.errors:
+                if field_name in self.fields:
+                    current_classes = self.fields[field_name].widget.attrs.get("class", "")
+                    self.fields[field_name].widget.attrs["class"] = f"{current_classes} is-invalid".strip()
 
     def clean_email(self):
         try:
@@ -107,7 +112,11 @@ class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
 
     def clean_register_no(self):
         value = str(self.cleaned_data.get("register_no") or "").strip()
-        if UserProfile.objects.filter(register_no__iexact=value).exists() or LoginAccessRequest.objects.filter(register_no__iexact=value).exists():
+        request_matches = LoginAccessRequest.objects.filter(register_no__iexact=value)
+        submitted_email = self.cleaned_data.get("email") or self.data.get("email")
+        if submitted_email:
+            request_matches = request_matches.exclude(email__iexact=str(submitted_email).strip())
+        if UserProfile.objects.filter(register_no__iexact=value).exists() or request_matches.exists():
             raise forms.ValidationError(REGISTRATION_NUMBER_EXISTS_MESSAGE)
         return value
 

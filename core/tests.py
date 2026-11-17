@@ -200,6 +200,35 @@ class LoginApprovalWorkflowTests(TestCase):
         self.assertContains(response, "This registration number already exists")
         self.assertFalse(LoginAccessRequest.objects.exists())
 
+    def test_signup_request_shows_field_errors_and_never_reports_success_when_invalid(self):
+        school = School.objects.create(name="School of Validation")
+        sport = Sport.objects.create(name="Validation Sport")
+
+        missing_response = self.client.post(reverse("student_signup_request"), {})
+        invalid_response = self.client.post(reverse("student_signup_request"), self.signup_payload(
+            school,
+            [sport],
+            email="not-an-email",
+            mobile_number="12ab",
+        ))
+
+        self.assertEqual(missing_response.status_code, 200)
+        self.assertContains(missing_response, "Please correct the highlighted fields below.")
+        self.assertContains(missing_response, "Student name is required.")
+        self.assertContains(missing_response, "Email is required.")
+        self.assertContains(missing_response, "Mobile number is required.")
+        self.assertContains(missing_response, "Registration number is required.")
+        self.assertContains(missing_response, "Select a school.")
+        self.assertContains(missing_response, "Department is required.")
+        self.assertContains(missing_response, "Select a gender.")
+        self.assertContains(missing_response, "Select at least one sport.")
+        self.assertContains(missing_response, "is-invalid")
+        self.assertNotContains(missing_response, "has been submitted and is pending Admin approval")
+        self.assertEqual(invalid_response.status_code, 200)
+        self.assertContains(invalid_response, "Enter a valid email address.")
+        self.assertContains(invalid_response, "Mobile number must be exactly 10 digits.")
+        self.assertFalse(LoginAccessRequest.objects.exists())
+
     def test_admin_can_review_and_approve_full_signup_request(self):
         school = School.objects.create(name="School of Engineering")
         cricket = Sport.objects.create(name="Cricket")
@@ -309,6 +338,84 @@ class LoginApprovalWorkflowTests(TestCase):
         self.adapter.pre_social_login(self.adapter_request(), sociallogin)
         sociallogin.connect.assert_called_once()
         self.assertEqual(sociallogin.user, recreated_user)
+
+
+class StudentListExportTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username="export-admin@christuniversity.in",
+            email="export-admin@christuniversity.in",
+            password="pass",
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.admin.profile.role = UserProfile.Role.SUPER_ADMIN
+        self.admin.profile.save(update_fields=["role", "updated_at"])
+        self.school = School.objects.create(name="School of Export")
+        self.first = self.make_student("First Student", "first.export@christuniversity.in", "EXP-001")
+        self.second = self.make_student("Second Student", "second.export@christuniversity.in", "EXP-002")
+
+    def make_student(self, name, email, register_no):
+        first_name, _, last_name = name.partition(" ")
+        user = User.objects.create_user(username=email, email=email, first_name=first_name, last_name=last_name)
+        user.profile.role = UserProfile.Role.MEMBER
+        user.profile.school = self.school
+        user.profile.department = "Sports Science"
+        user.profile.phone = "9876543210"
+        user.profile.register_no = register_no
+        user.profile.save()
+        return user
+
+    def test_student_list_has_download_dropdown_and_export_row_ids(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.get(reverse("members"))
+
+        self.assertContains(response, "Download")
+        self.assertContains(response, "Excel (.xlsx)")
+        self.assertContains(response, "PDF (.pdf)")
+        self.assertContains(response, f'data-student-id="{self.first.pk}"')
+        self.assertContains(response, 'id="studentExportForm"')
+
+    def test_excel_exports_only_requested_filtered_students_without_actions(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(reverse("export_students"), {
+            "format": "excel",
+            "student_ids": f"{self.second.pk}",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        workbook = load_workbook(BytesIO(response.content), data_only=True)
+        sheet = workbook["Students"]
+        self.assertEqual([cell.value for cell in sheet[1]], ["Student", "Email", "Mobile", "Reg No", "School", "Department", "Team", "Status"])
+        self.assertEqual(sheet.max_row, 2)
+        self.assertEqual(sheet.cell(2, 1).value, "Second Student")
+        self.assertEqual(sheet.cell(2, 2).value, self.second.email)
+        self.assertNotIn("Actions", [cell.value for cell in sheet[1]])
+        self.assertNotIn(self.first.email, [sheet.cell(row, 2).value for row in range(2, sheet.max_row + 1)])
+
+    def test_pdf_export_returns_only_table_document(self):
+        self.client.force_login(self.admin)
+
+        response = self.client.post(reverse("export_students"), {
+            "format": "pdf",
+            "student_ids": f"{self.first.pk},{self.second.pk}",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(response.content.startswith(b"%PDF"))
+        self.assertIn('filename="student-list.pdf"', response["Content-Disposition"])
+
+    def test_non_admin_cannot_export_student_list(self):
+        self.client.force_login(self.first)
+
+        response = self.client.post(reverse("export_students"), {"format": "excel", "student_ids": str(self.first.pk)})
+
+        self.assertEqual(response.status_code, 302)
+        self.assertFalse(response["Location"].endswith(reverse("export_students")))
 
 
 @override_settings(

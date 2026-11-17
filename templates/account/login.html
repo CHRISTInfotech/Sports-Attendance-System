@@ -33,6 +33,7 @@
         <p class="small text-muted mb-3">First-time student? Submit a signup request before signing in. Access is granted after Admin approval.</p>
         <form method="post" action="{% url 'student_signup_request' %}" data-signup-form>
           {% csrf_token %}
+          {% if signup_form.errors %}<div class="alert alert-danger py-2">Please correct the highlighted fields below.</div>{% endif %}
           {% if signup_form.non_field_errors %}<div class="alert alert-danger py-2">{{ signup_form.non_field_errors }}</div>{% endif %}
           <div class="row g-3">
             <div class="col-md-6"><label class="form-label" for="id_student_name">Student Name</label>{{ signup_form.student_name }}{% for error in signup_form.student_name.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}</div>
@@ -45,7 +46,7 @@
             <div class="col-md-6">
               <label class="form-label">Sports</label>
               <div class="dropdown signup-sports-dropdown" data-signup-sports>
-                <button class="form-select text-start" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"><span data-sports-label>Select Sports</span></button>
+                <button class="form-select text-start {% if signup_form.sports.errors %}is-invalid{% endif %}" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside"><span data-sports-label>Select Sports</span></button>
                 <div class="dropdown-menu w-100 p-2">
                   {% for sport in signup_form.fields.sports.queryset %}<label class="dropdown-item d-flex align-items-center gap-2"><input class="form-check-input mt-0" type="checkbox" name="sports" value="{{ sport.pk }}" {% if sport.pk|stringformat:'s' in signup_selected_sports %}checked{% endif %}><span>{{ sport.name }}</span></label>{% empty %}<p class="small text-muted mb-0 px-2">No sports available.</p>{% endfor %}
                   <div class="border-top mt-2 pt-2 text-end"><button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown">Done</button></div>

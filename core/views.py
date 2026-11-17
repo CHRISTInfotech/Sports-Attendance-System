@@ -1,6 +1,7 @@
 import re
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+from xml.sax.saxutils import escape
 
 from django.contrib import messages
 from django.contrib.auth import get_user_model
@@ -18,8 +19,11 @@ from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
-from reportlab.lib.pagesizes import A4
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 from allauth.socialaccount.models import SocialApp
 
 from .forms import (
@@ -104,7 +108,7 @@ def student_signup_request(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     google_configured = SocialApp.objects.filter(provider="google", sites__id=1).exists()
-    form = StudentSignupRequestForm(request.POST or None)
+    form = StudentSignupRequestForm(request.POST if request.method == "POST" else None)
     if request.method == "POST" and form.is_valid():
         try:
             with transaction.atomic():
@@ -2485,6 +2489,123 @@ def members_list(request):
         "registration_numbers": registration_numbers,
         "student_stats": student_stats,
     })
+
+
+def _student_export_rows(student_ids):
+    users_by_id = {
+        user.pk: user
+        for user in User.objects.filter(pk__in=student_ids, profile__role=UserProfile.Role.MEMBER)
+        .exclude(profile__account_status=UserProfile.AccountStatus.DELETED)
+        .select_related("profile", "profile__school")
+    }
+    memberships_by_user = {}
+    for membership in Membership.objects.filter(user_id__in=student_ids).select_related("team", "team__sport").order_by("team__sport__name", "team__name"):
+        memberships_by_user.setdefault(membership.user_id, []).append(membership)
+    direct_sports_by_user = {}
+    for association in StudentSport.objects.filter(user_id__in=student_ids, is_active=True).select_related("sport").order_by("sport__name"):
+        direct_sports_by_user.setdefault(association.user_id, []).append(association.sport.name)
+
+    rows = []
+    for student_id in student_ids:
+        user = users_by_id.get(student_id)
+        if not user:
+            continue
+        memberships = memberships_by_user.get(student_id, [])
+        team_labels = [f"{item.team.sport.name} - {item.team.get_gender_display()} {item.team.name}" for item in memberships]
+        if team_labels:
+            assignment = "; ".join(team_labels)
+        elif direct_sports_by_user.get(student_id):
+            assignment = f'{", ".join(direct_sports_by_user[student_id])} (Team not assigned)'
+        else:
+            assignment = "Not assigned"
+        account_status = user_account_status(user)
+        has_active_assignment = any(item.is_active for item in memberships) or bool(direct_sports_by_user.get(student_id)) or not memberships
+        status = "Active" if account_status == UserProfile.AccountStatus.ACTIVE and has_active_assignment else "Inactive"
+        rows.append([
+            user.get_full_name() or user.username,
+            user.email,
+            user.profile.phone or "-",
+            user.profile.register_no or "-",
+            user.profile.school.name if user.profile.school else "-",
+            user.profile.department or "-",
+            assignment,
+            status,
+        ])
+    return rows
+
+
+def _export_students_excel(rows):
+    headers = ["Student", "Email", "Mobile", "Reg No", "School", "Department", "Team", "Status"]
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Students"
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(row)
+    header_fill = PatternFill("solid", fgColor="003366")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    widths = [24, 34, 16, 18, 26, 24, 48, 14]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    sheet.freeze_panes = "A2"
+    output = BytesIO()
+    workbook.save(output)
+    response = HttpResponse(output.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    response["Content-Disposition"] = 'attachment; filename="student-list.xlsx"'
+    return response
+
+
+def _export_students_pdf(rows):
+    headers = ["Student", "Email", "Mobile", "Reg No", "School", "Department", "Team", "Status"]
+    output = BytesIO()
+    document = SimpleDocTemplate(output, pagesize=landscape(A4), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24)
+    styles = getSampleStyleSheet()
+    body_style = styles["BodyText"]
+    body_style.fontSize = 7
+    body_style.leading = 9
+    table_data = [[Paragraph(f"<b>{escape(header)}</b>", body_style) for header in headers]]
+    table_data.extend([[Paragraph(escape(str(value)), body_style) for value in row] for row in rows])
+    table = Table(table_data, colWidths=[76, 112, 58, 62, 82, 78, 190, 54], repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#003366")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("GRID", (0, 0), (-1, -1), .35, colors.HexColor("#C9D3DF")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7FA")]),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    document.build([table])
+    response = HttpResponse(output.getvalue(), content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="student-list.pdf"'
+    return response
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+def export_students(request):
+    if request.method != "POST":
+        return redirect("members")
+    student_ids = []
+    for raw_id in (request.POST.get("student_ids") or "").split(","):
+        try:
+            student_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if student_id not in student_ids:
+            student_ids.append(student_id)
+    rows = _student_export_rows(student_ids)
+    if request.POST.get("format") == "pdf":
+        return _export_students_pdf(rows)
+    return _export_students_excel(rows)
 
 
 @login_required

@@ -17,6 +17,7 @@ urlpatterns = [
     path("teams/new/", views.team_form, name="team_create"),
     path("teams/<int:pk>/edit/", views.team_form, name="team_edit"),
     path("members/", views.members_list, name="members"),
+    path("members/export/", views.export_students, name="export_students"),
     path("members/<int:pk>/details/", views.member_detail, name="member_detail"),
     path("trainers/", views.trainers_list, name="trainers"),
     path("settings/", views.settings_page, name="settings"),
