@@ -116,6 +116,19 @@ class LoginApprovalWorkflowTests(TestCase):
         with self.assertRaises(ImmediateHttpResponse):
             self.adapter.is_open_for_signup(self.adapter_request(), self.social_login(access_request.email, access_request.full_name))
 
+    def test_new_google_user_is_redirected_to_prefilled_signup_without_request_creation(self):
+        email = "new.google@law.christuniversity.in"
+        adapter_request = self.adapter_request()
+
+        with self.assertRaises(ImmediateHttpResponse) as raised:
+            self.adapter.is_open_for_signup(adapter_request, self.social_login(email, "New Google"))
+
+        self.assertEqual(raised.exception.response.url, f'{reverse("login")}?tab=signup')
+        self.assertEqual(adapter_request.session["google_signup_email"], email)
+        self.assertEqual(adapter_request.session["google_signup_name"], "New Google")
+        self.assertFalse(LoginAccessRequest.objects.filter(email=email).exists())
+        self.assertFalse(User.objects.filter(email=email).exists())
+
     def test_duplicate_and_invalid_signup_requests_are_rejected(self):
         school = School.objects.create(name="School of Law")
         sport = Sport.objects.create(name="Basketball")
@@ -132,11 +145,47 @@ class LoginApprovalWorkflowTests(TestCase):
         ))
 
         self.assertEqual(duplicate_response.status_code, 200)
-        self.assertContains(duplicate_response, "Your details/request have already been submitted.")
+        self.assertContains(duplicate_response, "Your signup request has already been submitted and is awaiting Admin approval.")
         self.assertEqual(invalid_response.status_code, 200)
         self.assertContains(invalid_response, "Please sign in with your Christ University Google account.")
         self.assertContains(invalid_response, "Mobile number must be exactly 10 digits.")
         self.assertEqual(LoginAccessRequest.objects.count(), 1)
+
+    def test_legacy_incomplete_request_can_be_completed_without_duplicate(self):
+        school = School.objects.create(name="School of Social Sciences")
+        sport = Sport.objects.create(name="Tennis")
+        email = "legacy.pending@christuniversity.in"
+        existing_request = LoginAccessRequest.objects.create(email=email, full_name="Legacy Pending")
+
+        response = self.client.post(reverse("student_signup_request"), self.signup_payload(
+            school,
+            [sport],
+            email=email,
+            register_no="REG-LEGACY-1",
+        ))
+
+        self.assertRedirects(response, reverse("login"))
+        self.assertEqual(LoginAccessRequest.objects.filter(email=email).count(), 1)
+        existing_request.refresh_from_db()
+        self.assertTrue(existing_request.has_complete_student_details)
+        self.assertEqual(existing_request.register_no, "REG-LEGACY-1")
+
+    def test_approved_student_cannot_submit_another_signup_request(self):
+        school = School.objects.create(name="School of Business")
+        sport = Sport.objects.create(name="Badminton")
+        email = "approved.student@christuniversity.in"
+        User.objects.create_user(username=email, email=email)
+
+        response = self.client.post(reverse("student_signup_request"), self.signup_payload(
+            school,
+            [sport],
+            email=email,
+            register_no="REG-APPROVED-1",
+        ))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "An account already exists for this email. Please continue with Google login.")
+        self.assertFalse(LoginAccessRequest.objects.filter(email=email).exists())
 
     def test_registration_number_duplicate_is_rejected_for_signup(self):
         school = School.objects.create(name="School of Commerce")
@@ -230,6 +279,21 @@ class LoginApprovalWorkflowTests(TestCase):
         self.assertEqual(LoginAccessRequest.objects.filter(email=email).count(), 1)
         self.assertFalse(User.objects.filter(email=email).exists())
 
+        school = School.objects.create(name="School of Reapplication")
+        sport = Sport.objects.create(name="Table Tennis")
+        self.client.logout()
+        signup_response = self.client.post(reverse("student_signup_request"), self.signup_payload(
+            school,
+            [sport],
+            student_name="Deleted Student",
+            email=email,
+            register_no="REG-REAPPLY-1",
+        ))
+        self.assertRedirects(signup_response, reverse("login"))
+        access_request.refresh_from_db()
+        self.assertTrue(access_request.has_complete_student_details)
+
+        self.client.force_login(self.admin)
         response = self.client.post(reverse("members"), {
             "action": "approve_request",
             "request_id": access_request.pk,

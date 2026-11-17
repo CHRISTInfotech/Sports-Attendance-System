@@ -5,6 +5,7 @@ from allauth.socialaccount.adapter import DefaultSocialAccountAdapter
 from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
+from django.urls import reverse
 
 from .email_validation import INVALID_CHRIST_EMAIL_MESSAGE, is_allowed_christ_email
 from .models import LoginAccessRequest, UserProfile
@@ -68,10 +69,13 @@ class ChristGoogleAccountAdapter(DefaultSocialAccountAdapter):
             return True
         if get_user_model().objects.filter(email__iexact=email).exists():
             return True
-        access_request, created = LoginAccessRequest.objects.get_or_create(
-            email=email,
-            defaults={"full_name": full_name, "status": LoginAccessRequest.Status.PENDING},
-        )
+        access_request = LoginAccessRequest.objects.filter(email__iexact=email).first()
+        signup_url = f'{reverse("login")}?tab=signup'
+        if access_request is None:
+            request.session["google_signup_email"] = email
+            request.session["google_signup_name"] = full_name
+            messages.info(request, "Complete the signup request form to request access to Sportix.")
+            raise ImmediateHttpResponse(redirect(signup_url))
         if access_request.status == LoginAccessRequest.Status.APPROVED:
             # An approved request always creates a user in the admin approval
             # transaction. If that user no longer exists, the approval belongs
@@ -91,14 +95,13 @@ class ChristGoogleAccountAdapter(DefaultSocialAccountAdapter):
         if access_request.status == LoginAccessRequest.Status.REJECTED:
             messages.error(request, "Your Sportix: sports attendance login request was rejected. Please contact the Sports Department.")
             raise ImmediateHttpResponse(redirect("login"))
-        if not created and full_name and access_request.full_name != full_name:
-            access_request.full_name = full_name
-            access_request.save(update_fields=["full_name", "updated_at"])
-        messages.warning(
-            request,
-            "First login? Your account requires admin approval before access is granted.",
-        )
-        raise ImmediateHttpResponse(redirect("login"))
+        if access_request.has_complete_student_details:
+            messages.warning(request, "Your signup request has already been submitted and is awaiting Admin approval.")
+            raise ImmediateHttpResponse(redirect("login"))
+        request.session["google_signup_email"] = email
+        request.session["google_signup_name"] = full_name
+        messages.info(request, "Complete the signup request form to request access to Sportix.")
+        raise ImmediateHttpResponse(redirect(signup_url))
 
     def save_user(self, request, sociallogin, form=None):
         user = super().save_user(request, sociallogin, form)

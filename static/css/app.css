@@ -787,28 +787,18 @@ img.avatar {
 .login-panel .alert {
   background: rgba(0, 51, 102, .72);
   border-color: rgba(255, 255, 255, .32);
+  border-radius: .65rem;
   color: #fff !important;
 }
 
-.login-body .alert,
-.login-body .alert *,
-.login-panel .alert,
 .login-panel .alert * {
-  color: #fff !important;
-}
-
-.login-panel .alert-success,
-.login-panel .alert-warning,
-.login-panel .alert-danger,
-.login-panel .alert-error,
-.login-panel .alert-info {
   color: #fff !important;
 }
 
 .login-panel .login-note {
   background: rgba(255, 255, 255, .14);
   border: 1px solid rgba(255, 255, 255, .28);
-  border-radius: .85rem;
+  border-radius: .65rem;
   color: #fff;
   display: grid;
   gap: .25rem;
@@ -820,13 +810,25 @@ img.avatar {
 }
 
 .login-tabs .nav-link {
-  color: rgba(255, 255, 255, 0.72);
-  border-color: transparent;
+  border: 1px solid transparent;
+  border-radius: .62rem;
+  color: var(--muted);
+  font-size: .92rem;
+  font-weight: 700;
+  padding: .7rem 1rem;
+  transition: background-color .18s ease, border-color .18s ease, box-shadow .18s ease, color .18s ease;
 }
 
 .login-tabs .nav-link.active {
-  color: var(--primary, #003366);
   background: #fff;
+  border-color: #d9e1ea;
+  box-shadow: 0 2px 8px rgba(0, 51, 102, .1);
+  color: var(--primary, #003366);
+}
+
+.login-tabs .nav-link:not(.active):hover {
+  background: rgba(255, 255, 255, .5);
+  color: var(--primary, #003366);
 }
 
 .login-panel-auth .form-label {
@@ -839,6 +841,60 @@ img.avatar {
 .signup-sports-dropdown .dropdown-menu {
   max-height: 15rem;
   overflow-y: auto;
+}
+
+.login-panel .login-tab-switcher {
+  background: #eef1f4;
+  border: 1px solid #e1e6eb;
+  border-radius: .82rem;
+  gap: .35rem;
+  padding: .35rem;
+}
+
+.login-tab-switcher .nav-item {
+  min-width: 0;
+}
+
+.login-logo {
+  border: 1px solid #dce5ef;
+  border-radius: 50%;
+  height: 54px;
+  margin-bottom: 1rem;
+  object-fit: cover;
+  width: 54px;
+}
+
+.login-divider {
+  align-items: center;
+  color: rgba(255, 255, 255, .72);
+  display: flex;
+  font-size: .76rem;
+  gap: .75rem;
+  margin: 1rem 0;
+  text-transform: uppercase;
+}
+
+.login-divider::before,
+.login-divider::after {
+  background: rgba(255, 255, 255, .3);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+
+.login-footer {
+  border-top: 1px solid rgba(255, 255, 255, .28);
+  color: rgba(255, 255, 255, .72);
+  font-size: .8rem;
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+
+@media (max-width: 575.98px) {
+  .login-tab-switcher .nav-link {
+    font-size: .84rem;
+    padding-inline: .55rem;
+  }
 }
 
 .data-table {
@@ -1702,19 +1758,24 @@ body.modal-open {
     url("https://images.unsplash.com/photo-1547347298-4074fc3086f0?auto=format&fit=crop&w=1600&q=80") center/cover;
   display: flex;
   min-height: 100vh;
-  padding: 1rem;
+  padding: 2rem 1rem;
 }
 
 .login-panel {
-  color: white;
+  color: #fff;
   max-width: 520px;
   margin-left: clamp(1rem, 8vw, 7rem);
 }
 
 .login-panel h1 {
+  color: #fff;
   font-size: clamp(2.2rem, 6vw, 4.5rem);
   font-weight: 800;
   line-height: 1;
+}
+
+.login-panel #signupRequestPane > p {
+  color: rgba(255, 255, 255, .82) !important;
 }
 
 .notification-badge {

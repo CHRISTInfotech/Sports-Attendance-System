@@ -89,11 +89,14 @@ def login_page(request):
     if request.user.is_authenticated:
         return redirect("dashboard")
     google_configured = SocialApp.objects.filter(provider="google", sites__id=1).exists()
+    signup_email = request.session.get("google_signup_email", "")
+    signup_name = request.session.get("google_signup_name", "")
+    active_tab = "signup" if request.GET.get("tab") == "signup" or signup_email else "google"
     return render(request, "account/login.html", {
         "google_configured": google_configured,
-        "signup_form": StudentSignupRequestForm(),
+        "signup_form": StudentSignupRequestForm(initial={"email": signup_email, "student_name": signup_name}),
         "signup_selected_sports": [],
-        "active_login_tab": "google",
+        "active_login_tab": active_tab,
     })
 
 
@@ -105,20 +108,25 @@ def student_signup_request(request):
     if request.method == "POST" and form.is_valid():
         try:
             with transaction.atomic():
-                access_request = LoginAccessRequest.objects.create(
-                    email=form.cleaned_data["email"],
-                    full_name=form.cleaned_data["student_name"].strip(),
-                    phone=form.cleaned_data["mobile_number"],
-                    register_no=form.cleaned_data["register_no"],
-                    school=form.cleaned_data["school"],
-                    department=form.cleaned_data["department"].strip(),
-                    gender=form.cleaned_data["gender"],
-                    status=LoginAccessRequest.Status.PENDING,
-                )
+                access_request = LoginAccessRequest.objects.select_for_update().filter(email__iexact=form.cleaned_data["email"]).first()
+                if access_request is None:
+                    access_request = LoginAccessRequest(email=form.cleaned_data["email"])
+                access_request.full_name = form.cleaned_data["student_name"].strip()
+                access_request.phone = form.cleaned_data["mobile_number"]
+                access_request.register_no = form.cleaned_data["register_no"]
+                access_request.school = form.cleaned_data["school"]
+                access_request.department = form.cleaned_data["department"].strip()
+                access_request.gender = form.cleaned_data["gender"]
+                access_request.status = LoginAccessRequest.Status.PENDING
+                access_request.reviewed_by = None
+                access_request.reviewed_at = None
+                access_request.save()
                 access_request.sports.set(form.cleaned_data["sports"])
         except IntegrityError:
             form.add_error("email", "Your details/request have already been submitted.")
         else:
+            request.session.pop("google_signup_email", None)
+            request.session.pop("google_signup_name", None)
             messages.success(request, "Your signup request has been submitted and is pending Admin approval.")
             return redirect("login")
     return render(request, "account/login.html", {

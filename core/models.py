@@ -71,6 +71,18 @@ class LoginAccessRequest(TimeStampedModel):
     def __str__(self):
         return f"{self.email} - {self.get_status_display()}"
 
+    @property
+    def has_complete_student_details(self):
+        return bool(
+            self.full_name.strip()
+            and self.phone.strip()
+            and self.register_no.strip()
+            and self.school_id
+            and self.department.strip()
+            and self.gender
+            and self.sports.exists()
+        )
+
 
 class Sport(TimeStampedModel):
     name = models.CharField(max_length=120, unique=True)

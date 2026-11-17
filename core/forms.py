@@ -92,7 +92,11 @@ class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
         if existing_request:
             if existing_request.status == LoginAccessRequest.Status.APPROVED:
                 raise forms.ValidationError("This request is already approved. Please continue with Google login.")
-            raise forms.ValidationError("Your details/request have already been submitted.")
+            if existing_request.status == LoginAccessRequest.Status.PENDING and not existing_request.has_complete_student_details:
+                return email
+            if existing_request.status == LoginAccessRequest.Status.PENDING:
+                raise forms.ValidationError("Your signup request has already been submitted and is awaiting Admin approval.")
+            raise forms.ValidationError("Your signup request was rejected. Please contact the Sports Department Admin.")
         return email
 
     def clean_mobile_number(self):
