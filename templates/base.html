@@ -151,7 +151,7 @@
         <a class="{% if request.resolver_match.url_name == 'my_attendance' %}active{% endif %}" href="{% url 'my_attendance' %}"><i class="bi bi-clipboard-check"></i><span>Attendance</span></a>
       {% endif %}
       {% if user.is_superuser or user.profile.role == 'SUPER_ADMIN' or user.profile.role == 'SUB_ADMIN' or user.profile.role == 'TRAINER' or user.profile.role == 'COORDINATOR' %}
-        <a class="{% if request.resolver_match.url_name == 'members' or request.resolver_match.url_name == 'member_detail' %}active{% endif %}" href="{% url 'members' %}"><i class="bi bi-people"></i><span>Add Students</span></a>
+        <a class="{% if request.resolver_match.url_name == 'members' or request.resolver_match.url_name == 'member_detail' %}active{% endif %}" href="{% url 'members' %}"><i class="bi bi-people"></i><span>Students</span></a>
       {% else %}
         <a class="{% if request.resolver_match.url_name == 'feedback' or request.resolver_match.url_name == 'send_feedback' %}active{% endif %}" href="{% url 'feedback' %}"><i class="bi bi-chat-left-text"></i><span>Feedback</span></a>
       {% endif %}
