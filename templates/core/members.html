@@ -3,7 +3,7 @@
 {% block content %}
 <div class="page-head">
   <div><p class="eyebrow">Roster</p><h1>Add Students</h1><p class="text-muted mb-0">Create student records, assign teams, and approve Google login requests.</p></div>
-  {% if can_manage_students and teams %}
+  {% if is_admin_user or can_manage_students and teams %}
     <div class="d-flex flex-wrap gap-2">
       <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#memberModal" data-mode="create"><i class="bi bi-person-plus"></i> Add Student</button>
       <button class="btn btn-outline-primary" data-bs-toggle="modal" data-bs-target="#bulkUploadModal"><i class="bi bi-upload"></i> Bulk Upload</button>
@@ -12,7 +12,6 @@
 </div>
 
 <div class="metric-grid admin-metric-grid">
-  <div class="metric metric-students"><i class="bi bi-people"></i><span>Total Students</span><strong>{{ student_stats.total }}</strong></div>
   <div class="metric metric-teams"><i class="bi bi-person-check"></i><span>Active Students</span><strong>{{ student_stats.active }}</strong></div>
   <div class="metric metric-sports"><i class="bi bi-trophy"></i><span>Sports Participation</span><strong>{{ sports|length }}</strong></div>
 </div>
@@ -36,7 +35,7 @@
             <td><span class="badge {% if request_item.status == 'REJECTED' %}text-bg-danger{% else %}text-bg-warning{% endif %}">{{ request_item.get_status_display }}</span></td>
             <td>{{ request_item.requested_at|date:"d M Y, h:i A" }}</td>
             <td class="text-end">
-              <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#loginRequestDetailsModal" data-request-name="{{ request_item.full_name|default:'-' }}" data-request-email="{{ request_item.email }}" data-request-mobile="{{ request_item.phone|default:'-' }}" data-request-register="{{ request_item.register_no|default:'-' }}" data-request-school="{{ request_item.school.name|default:'-' }}" data-request-department="{{ request_item.department|default:'-' }}" data-request-gender="{{ request_item.gender|default:'-' }}" data-request-sports="{% for sport in request_item.sports.all %}{{ sport.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}" data-request-status="{{ request_item.get_status_display }}" data-requested-at="{{ request_item.requested_at|date:'d M Y, h:i A' }}"><i class="bi bi-eye"></i> View Details</button>
+              <button class="btn btn-sm btn-outline-primary" type="button" data-bs-toggle="modal" data-bs-target="#loginRequestDetailsModal" data-login-request-id="{{ request_item.pk }}" data-request-name="{{ request_item.full_name|default:'-' }}" data-request-email="{{ request_item.email }}" data-request-mobile="{{ request_item.phone|default:'-' }}" data-request-register="{{ request_item.register_no|default:'-' }}" data-request-school="{{ request_item.school.name|default:'-' }}" data-request-department="{{ request_item.department|default:'-' }}" data-request-gender="{{ request_item.gender|default:'-' }}" data-request-sports="{% for sport in request_item.sports.all %}{{ sport.name }}{% if not forloop.last %}, {% endif %}{% empty %}-{% endfor %}" data-request-status="{{ request_item.get_status_display }}" data-request-requested-at="{{ request_item.requested_at|date:'d M Y, h:i A' }}"><i class="bi bi-eye"></i> View Details</button>
               <form class="d-inline" method="post">{% csrf_token %}<input type="hidden" name="request_id" value="{{ request_item.pk }}"><input type="hidden" name="action" value="approve_request"><button class="btn btn-sm btn-primary">Approve</button></form>
               {% if request_item.status != 'REJECTED' %}
                 <form class="d-inline" method="post">{% csrf_token %}<input type="hidden" name="request_id" value="{{ request_item.pk }}"><input type="hidden" name="action" value="reject_request"><button class="btn btn-sm btn-outline-secondary">Reject</button></form>
@@ -176,7 +175,7 @@
                   <i class="bi bi-check-lg"></i>
                 </label>
               {% empty %}
-                <p class="text-muted mb-0">No teams available.</p>
+                <p class="text-muted mb-0">No active teams available.</p>
               {% endfor %}
             </div>
           </div>
@@ -236,7 +235,7 @@
     </div>
   </div>
 </div>
-{% if can_manage_students and teams %}
+{% if is_admin_user or can_manage_students and teams %}
   {% include "partials/bulk_upload_modal.html" with bulk_kind="students" bulk_title="Students" %}
 {% endif %}
 {{ registration_numbers|json_script:"registration-number-data" }}
@@ -313,6 +312,12 @@
   });
 
   const registrationNumbers = JSON.parse(document.getElementById('registration-number-data')?.textContent || '[]');
+  const requestedSignupId = new URLSearchParams(window.location.search).get('login_request');
+  const signupDetailsButton = Array.from(document.querySelectorAll('[data-login-request-id]'))
+    .find(button => button.dataset.loginRequestId === requestedSignupId);
+  if (signupDetailsButton) {
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('loginRequestDetailsModal')).show(signupDetailsButton);
+  }
 
   function validateRegistrationNumber(form) {
     const input = form.querySelector('[data-unique-register-no]');

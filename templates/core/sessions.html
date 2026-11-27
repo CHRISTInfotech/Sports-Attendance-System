@@ -25,7 +25,10 @@
     <div class="col-md-2">{{ form.start_date.label_tag }}{{ form.start_date }}</div>
     <div class="col-md-2">{{ form.end_date.label_tag }}{{ form.end_date }}</div>
     <div class="col-md-2"><label class="form-label" for="sessionRowsPerPage">Rows per page</label><select class="form-select" id="sessionRowsPerPage" name="rows_per_page" onchange="this.form.submit()"><option value="10"{% if rows_per_page == 10 %} selected{% endif %}>10</option><option value="25"{% if rows_per_page == 25 %} selected{% endif %}>25</option><option value="50"{% if rows_per_page == 50 %} selected{% endif %}>50</option><option value="100"{% if rows_per_page == 100 %} selected{% endif %}>100</option></select></div>
-    <div class="col-md-2 d-flex align-items-end"><button class="btn btn-outline-primary w-100">Filter</button></div>
+    <div class="col-md-2 d-flex flex-wrap align-items-end gap-2">
+      <button class="btn btn-outline-primary" type="submit">Filter</button>
+      <a class="btn btn-outline-secondary" href="{% url 'sessions' %}?rows_per_page={{ rows_per_page }}"><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clear Filters</a>
+    </div>
   </form>
 </section>
 

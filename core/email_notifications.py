@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 SUBJECTS = {
+    "student_signup_request": "New Student Signup Request",
     "practice_scheduled": "Practice Session Scheduled",
     "practice_updated": "Practice Session Updated",
     "practice_rescheduled": "Practice Session Rescheduled",

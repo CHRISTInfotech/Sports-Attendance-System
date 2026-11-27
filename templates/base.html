@@ -46,7 +46,7 @@
               <div class="notification-list">
                 {% url 'feedback' as feedback_url %}
                 {% for notification in topbar_notifications %}
-                  {% if notification.target_url == feedback_url %}
+                  {% if notification.target_url == feedback_url or notification.title == "New student signup request" %}
                     <a class="notification-item {% if notification.is_read %}is-read{% endif %}" href="{{ notification.target_url }}">
                       <span class="notification-dot"></span>
                       <span>
@@ -210,8 +210,9 @@
           </select>
         </div>
       `;
+      const unfilteredHeaders = new Set(['actions', 'email', 'name', 'mobile', 'requested']);
       headers.forEach((header, columnIndex) => {
-        if (!header || header.toLowerCase() === 'actions') return;
+        if (!header || unfilteredHeaders.has(header.toLowerCase())) return;
         if (headerCells[columnIndex]?.dataset.filter === 'false') return;
         const filterLabel = headerCells[columnIndex]?.dataset.filterLabel || header;
         const values = dataRows.map(row => {
@@ -225,18 +226,16 @@
         holder.innerHTML = `<label class="form-label" for="${id}">${filterLabel}</label><select id="${id}" class="form-select form-select-sm" data-column="${columnIndex}"><option value="">Select ${filterLabel}</option>${uniqueValues.map(value => `<option value="${value.replaceAll('"', '&quot;')}">${value}</option>`).join('')}</select>`;
         tools.appendChild(holder);
       });
-      if (table.dataset.resetFilters === 'true') {
-        const resetHolder = document.createElement('div');
-        resetHolder.className = 'table-tools-reset';
-        resetHolder.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary" data-reset-table-filters title="Reset filters"><i class="bi bi-arrow-counterclockwise"></i> Reset</button>';
-        resetHolder.querySelector('button').addEventListener('click', () => {
-          tools.querySelector('input[type="search"]').value = '';
-          tools.querySelectorAll('select[data-column]').forEach(select => { select.value = ''; });
-          currentPage = 1;
-          applyTableState();
-        });
-        tools.appendChild(resetHolder);
-      }
+      const resetHolder = document.createElement('div');
+      resetHolder.className = 'table-tools-reset';
+      resetHolder.innerHTML = '<button type="button" class="btn btn-sm btn-outline-secondary" data-reset-table-filters><i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i> Clear Filters</button>';
+      resetHolder.querySelector('button').addEventListener('click', () => {
+        tools.querySelector('input[type="search"]').value = '';
+        tools.querySelectorAll('select[data-column]').forEach(select => { select.value = ''; });
+        currentPage = 1;
+        applyTableState();
+      });
+      tools.appendChild(resetHolder);
       wrapper.parentNode.insertBefore(tools, wrapper);
       const mobileCards = document.createElement('div');
       mobileCards.className = 'mobile-table-cards';

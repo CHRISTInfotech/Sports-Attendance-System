@@ -18,7 +18,6 @@
 </div>
 
 <div class="metric-grid admin-metric-grid">
-  <div class="metric metric-trainers"><i class="bi bi-person-workspace"></i><span>Total Trainers</span><strong>{{ trainer_stats.total }}</strong></div>
   <div class="metric metric-teams"><i class="bi bi-person-check"></i><span>Active Trainers</span><strong>{{ trainer_stats.active }}</strong></div>
   <div class="metric metric-sports"><i class="bi bi-trophy"></i><span>Assigned Sports</span><strong>{{ trainer_stats.assigned_sports }}</strong></div>
 </div>
@@ -127,14 +126,14 @@
         </div>
       </div>
       <div class="modal-footer"><button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button><button class="btn btn-primary" type="submit">Save Trainer</button></div>
-    </form>
+    </form>i
   </div>
 </div>
 
 <div class="modal fade" id="trainerViewModal" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
-      <div class="modal-header"><h5 class="modal-title">Trainer Details</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-header"><h5 class="modal-title">Trainer Details asdsa</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="modal-body">
         <div class="metric-grid view-stat-grid mb-3">
           <div class="metric metric-sports mini"><i class="bi bi-calendar-event"></i><span>Practice Sessions</span><strong data-field="view-assigned-sessions"></strong></div>
@@ -143,7 +142,7 @@
           <div class="metric metric-teams mini"><i class="bi bi-send"></i><span>Feedback Submitted</span><strong data-field="view-feedback-submitted"></strong></div>
         </div>
         <div class="detail-list">
-          <div><span>Name</span><strong data-field="view-name"></strong></div>
+          <dv><span>Name</span><strong data-field="view-name"></strong></div>
           <div><span>Email</span><strong data-field="view-email"></strong></div>
           <div><span>Mobile</span><strong data-field="view-mobile"></strong></div>
           <div><span>Reg No</span><strong data-field="view-register-no"></strong></div>
@@ -201,7 +200,7 @@
     modal.querySelector('.modal-title').textContent = mode === 'edit' ? 'Edit Trainer' : 'Add Trainer';
     modal.querySelector('[data-field="action"]').value = mode === 'edit' ? 'update' : 'create';
     ['id', 'name', 'email', 'mobile', 'registerNo'].forEach(key => {
-      const field = modal.querySelector(`[data-field="${key}"]`);
+      const field = modal.querySelector(`[data-field="${key === 'registerNo' ? 'register-no' : key}"]`);
       if (field) field.value = b?.dataset[key] || '';
     });
     modal.querySelectorAll('input[name="teams"]').forEach(input => {
@@ -222,7 +221,7 @@
     const b = event.relatedTarget;
     const modal = event.currentTarget;
     ['name', 'email', 'mobile', 'registerNo', 'status', 'sports', 'assignedSessions', 'markedSessions', 'feedbackReceived', 'feedbackSubmitted'].forEach(key => {
-      const field = modal.querySelector(`[data-field="view-${key}"]`);
+      const field = modal.querySelector(`[data-field="view-${key === 'registerNo' ? 'register-no' : key}"]`);
       if (field) field.textContent = b?.dataset[key] || '-';
     });
   });

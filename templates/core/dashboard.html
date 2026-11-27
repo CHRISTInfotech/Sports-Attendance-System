@@ -12,12 +12,12 @@
 
 <div class="metric-grid {% if user.is_superuser or user.profile.role == 'SUPER_ADMIN' or user.profile.role == 'SUB_ADMIN' %}admin-metric-grid{% elif trainer_stats %}trainer-metric-grid{% endif %}">
   {% if user.is_superuser or user.profile.role == 'SUPER_ADMIN' or user.profile.role == 'SUB_ADMIN' %}
-    <div class="metric metric-sports"><i class="bi bi-trophy"></i><span>Sports</span><strong>{{ admin_stats.sports }}</strong></div>
-    <div class="metric metric-teams"><i class="bi bi-diagram-3"></i><span>Teams</span><strong>{{ admin_stats.teams }}</strong></div>
-    <div class="metric metric-students"><i class="bi bi-people"></i><span>Students</span><strong>{{ admin_stats.students }}</strong></div>
-    <div class="metric metric-trainers"><i class="bi bi-person-workspace"></i><span>Trainers</span><strong>{{ admin_stats.trainers }}</strong></div>
-    <div class="metric metric-male"><i class="bi bi-gender-male"></i><span>Male Teams</span><strong>{{ admin_stats.male_teams }}</strong></div>
-    <div class="metric metric-female"><i class="bi bi-gender-female"></i><span>Female Teams</span><strong>{{ admin_stats.female_teams }}</strong></div>
+    <div class="metric metric-sports"><i class="bi bi-trophy"></i><span>Active Sports</span><strong>{{ admin_stats.sports }}</strong></div>
+    <div class="metric metric-teams"><i class="bi bi-diagram-3"></i><span>Active Teams</span><strong>{{ admin_stats.teams }}</strong></div>
+    <div class="metric metric-students"><i class="bi bi-people"></i><span>Active Students</span><strong>{{ admin_stats.students }}</strong></div>
+    <div class="metric metric-trainers"><i class="bi bi-person-workspace"></i><span>Active Trainers</span><strong>{{ admin_stats.trainers }}</strong></div>
+    <div class="metric metric-male"><i class="bi bi-gender-male"></i><span>Active Male Teams</span><strong>{{ admin_stats.male_teams }}</strong></div>
+    <div class="metric metric-female"><i class="bi bi-gender-female"></i><span>Active Female Teams</span><strong>{{ admin_stats.female_teams }}</strong></div>
   {% elif trainer_stats %}
     <div class="metric metric-sports"><i class="bi bi-trophy"></i><span>Assigned Sports</span><strong>{{ trainer_stats.sports }}</strong></div>
     <div class="metric metric-teams"><i class="bi bi-diagram-3"></i><span>Assigned Teams</span><strong>{{ trainer_stats.teams }}</strong></div>

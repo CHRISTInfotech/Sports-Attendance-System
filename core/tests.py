@@ -18,7 +18,7 @@ from django.urls import reverse
 from django.utils import timezone
 from openpyxl import Workbook, load_workbook
 
-from .models import AttendanceRecord, EmailNotificationJob, LoginAccessRequest, Meeting, Membership, School, Session, Sport, StudentSport, Team, UserProfile, Venue
+from .models import AttendanceRecord, EmailNotificationJob, LoginAccessRequest, Meeting, Membership, Notification, School, Session, Sport, StudentSport, Team, UserProfile, Venue
 from .views import (
     _management_bulk_workbook,
     _simple_status_bulk_workbook,
@@ -37,6 +37,107 @@ from .adapters import ChristGoogleAccountAdapter
 
 
 User = get_user_model()
+
+
+class AdminStudentCreationTests(TestCase):
+    def test_admin_can_add_student_with_or_without_active_teams(self):
+        self.client.force_login(User.objects.create_superuser("student-admin"))
+        sport = Sport.objects.create(name="Cricket")
+        team = Team.objects.create(sport=sport, name="First Team", team_type=Team.TeamType.UNIVERSITY, gender=Team.TeamGender.MALE, is_active=False)
+
+        for has_active_team in (False, True):
+            with self.subTest(has_active_team=has_active_team):
+                team.is_active = has_active_team
+                team.save(update_fields=["is_active"])
+                response = self.client.get(reverse("members"))
+                self.assertContains(response, 'data-bs-target="#memberModal" data-mode="create"')
+                if has_active_team:
+                    self.assertContains(response, 'data-bs-target="#bulkUploadModal"')
+                    self.assertEqual(list(response.context["teams"]), [team])
+                else:
+                    self.assertContains(response, "No active teams available.")
+                    self.assertNotContains(response, 'data-bs-target="#bulkUploadModal"')
+                    self.assertFalse(response.context["teams"])
+                email = f"student-{has_active_team}@christuniversity.in".lower()
+                response = self.client.post(reverse("members"), {
+                    "action": "create", "student_name": "Test Student", "student_email": email,
+                    "teams": [team.pk] if has_active_team else [], "is_active": "on",
+                })
+                self.assertRedirects(response, reverse("members"))
+                student = User.objects.get(email=email)
+                self.assertEqual(list(Membership.objects.filter(user=student).values_list("team_id", flat=True)), [team.pk] if has_active_team else [])
+
+
+class AdminStudentEntryTests(TestCase):
+    def setUp(self):
+        self.client.force_login(User.objects.create_superuser("entry-admin"))
+
+    def test_edit_trainer_exposes_saved_registration_number(self):
+        trainer = User.objects.create_user("trainer", "trainer@christuniversity.in", first_name="Test Trainer")
+        trainer.profile.role = UserProfile.Role.TRAINER
+        trainer.profile.register_no = "REG-0007"
+        trainer.profile.phone = "9876543210"
+        trainer.profile.save()
+        response = self.client.get(reverse("trainers"))
+        self.assertContains(response, 'data-mode="edit"')
+        self.assertContains(response, 'data-register-no="REG-0007"')
+        self.assertContains(response, 'data-mobile="9876543210"')
+        self.assertContains(response, 'name="register_no" data-field="register-no"')
+
+    def test_student_and_trainer_create_reject_existing_email(self):
+        account = User.objects.create_user("legacy-username", "registered@christuniversity.in", first_name="Original")
+        for page, prefix, modal in (("members", "student", "memberModal"), ("trainers", "trainer", "trainerModal")):
+            with self.subTest(page=page):
+                response = self.client.post(reverse(page), {
+                    "action": "create", f"{prefix}_name": "Attempted Change",
+                    f"{prefix}_email": " REGISTERED@CHRISTUNIVERSITY.IN ",
+                }, follow=True)
+                self.assertEqual(response.context["retry_modal"]["id"], modal)
+                self.assertContains(response, "This email ID already registered. Please use a different email ID.")
+                self.assertNotContains(response, "saved successfully")
+                account.refresh_from_db()
+                self.assertEqual(account.first_name, "Original")
+                self.assertEqual(account.profile.role, UserProfile.Role.MEMBER)
+                self.assertEqual(User.objects.filter(email__iexact=account.email).count(), 1)
+
+    def test_admin_can_create_without_teams_and_bulk_upload_without_assignment(self):
+        url = reverse("members")
+        response = self.client.get(url)
+        self.assertContains(response, 'data-bs-target="#memberModal"')
+        self.assertContains(response, 'data-bs-target="#bulkUploadModal"')
+        self.assertContains(response, 'id="bulkUploadModal"')
+        self.assertContains(response, "No active teams available.")
+        self.assertRedirects(self.client.post(url, {
+            "action": "create", "student_name": "Manual Student",
+            "student_email": "manual@christuniversity.in", "is_active": "on",
+        }), url)
+        workbook = Workbook()
+        workbook.active.append(["Student Name", "Student Email"])
+        workbook.active.append(["Bulk Student", "bulk@christuniversity.in"])
+        output = BytesIO()
+        workbook.save(output)
+        self.assertRedirects(self.client.post(url, {
+            "action": "bulk_upload", "bulk_file": SimpleUploadedFile("students.xlsx", output.getvalue()),
+        }), url)
+        self.assertEqual(User.objects.filter(email__in=["manual@christuniversity.in", "bulk@christuniversity.in"]).count(), 2)
+        self.assertFalse(Membership.objects.exists())
+
+    def test_admin_can_assign_active_team_and_counts_exclude_inactive_inventory(self):
+        sport = Sport.objects.create(name="Cricket")
+        team = Team.objects.create(sport=sport, name="Active Team", team_type=Team.TeamType.UNIVERSITY, gender=Team.TeamGender.MALE)
+        School.objects.create(name="Inactive School", is_active=False)
+        url = reverse("members")
+        self.assertContains(self.client.get(url), team.name)
+        self.assertRedirects(self.client.post(url, {
+            "action": "create", "student_name": "Team Student",
+            "student_email": "team@christuniversity.in", "teams": [team.pk], "is_active": "on",
+        }), url)
+        self.assertTrue(Membership.objects.filter(team=team, user__email="team@christuniversity.in").exists())
+        sport.is_active = False
+        sport.save(update_fields=["is_active"])
+        stats = self.client.get(reverse("dashboard")).context["admin_stats"]
+        self.assertEqual((stats["sports"], stats["teams"], stats["students"]), (0, 0, 1))
+        self.assertEqual(self.client.get(reverse("schools")).context["active_school_count"], 0)
 
 
 class CatalogNameTests(TestCase):
@@ -209,6 +310,28 @@ class LoginApprovalWorkflowTests(TestCase):
 
         with self.assertRaises(ImmediateHttpResponse):
             self.adapter.is_open_for_signup(self.adapter_request(), self.social_login(access_request.email, access_request.full_name))
+
+    @override_settings(EMAIL_NOTIFICATIONS_ENABLED=True)
+    def test_signup_notifies_admin_once_with_request_link(self):
+        school = School.objects.create(name="Science")
+        sport = Sport.objects.create(name="Cricket")
+        User.objects.create_user("ordinary", "ordinary@christuniversity.in")
+        payload = self.signup_payload(school, [sport])
+        self.client.post(reverse("student_signup_request"), payload)
+        self.client.post(reverse("student_signup_request"), payload)
+        access_request = LoginAccessRequest.objects.get(email=payload["email"])
+        target = f"{reverse('members')}?login_request={access_request.pk}#loginRequestsTable"
+        notice = Notification.objects.get()
+        self.assertEqual(notice.user, self.admin)
+        self.assertEqual(notice.target_url, target)
+        self.assertIn(payload["student_name"], notice.message)
+        job = EmailNotificationJob.objects.get()
+        self.assertEqual(job.recipient_user_ids, [self.admin.pk])
+        self.assertEqual(job.notification_type, "student_signup_request")
+        self.assertTrue(job.context["action_url"].endswith(target))
+        self.assertIn(["Sports", "Cricket"], job.context["details"])
+        self.client.force_login(self.admin)
+        self.assertContains(self.client.get(target.split("#")[0]), f'data-login-request-id="{access_request.pk}"')
 
     def test_new_google_user_is_redirected_to_prefilled_signup_without_request_creation(self):
         email = "new.google@law.christuniversity.in"

@@ -32,6 +32,7 @@
                   <td style="padding:10px 12px;border-bottom:1px solid #e2e6ee;font-size:14px;line-height:1.45">{{ value }}</td>
                 </tr>{% endif %}{% endfor %}
               </table>{% endif %}
+              {% if action_url %}<p><a href="{{ action_url }}">{{ action_label }}</a></p>{% endif %}
               <p style="font-size:14px;line-height:1.6;color:#687386;margin:24px 0 0">This is an automated notification
                 from the Sportix: Sports Attendance System. Please do not reply to this email.</p>
             </td>

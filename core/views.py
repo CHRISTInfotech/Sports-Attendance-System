@@ -65,7 +65,12 @@ from .models import (
 from .permissions import ADMIN_ROLES, TRAINER_ROLES, can_manage_team, can_schedule_session, can_take_attendance, is_admin_user, role_for, role_required
 
 User = get_user_model()
+DUPLICATE_ACCOUNT_EMAIL = "This email ID already registered. Please use a different email ID."
 STUDENT_ROLES = (UserProfile.Role.MEMBER, UserProfile.Role.CAPTAIN, UserProfile.Role.VICE_CAPTAIN)
+
+
+def active_accounts(queryset):
+    return queryset.filter(is_active=True, profile__account_status=UserProfile.AccountStatus.ACTIVE)
 
 
 def student_accounts():
@@ -123,6 +128,8 @@ def student_signup_request(request):
                 access_request = LoginAccessRequest.objects.select_for_update().filter(email__iexact=form.cleaned_data["email"]).first()
                 if access_request is None:
                     access_request = LoginAccessRequest(email=form.cleaned_data["email"])
+                elif access_request.status != LoginAccessRequest.Status.PENDING or access_request.has_complete_student_details:
+                    raise IntegrityError("Signup request already submitted")
                 access_request.full_name = form.cleaned_data["student_name"].strip()
                 access_request.phone = form.cleaned_data["mobile_number"]
                 access_request.register_no = form.cleaned_data["register_no"]
@@ -134,6 +141,24 @@ def student_signup_request(request):
                 access_request.reviewed_at = None
                 access_request.save()
                 access_request.sports.set(form.cleaned_data["sports"])
+                target_url = f"{reverse('members')}?login_request={access_request.pk}#loginRequestsTable"
+                create_notifications(
+                    admin_users(),
+                    "New student signup request",
+                    f"{access_request.full_name} ({access_request.email}) requested access to Sportix.",
+                    target_url=target_url,
+                    email_type="student_signup_request",
+                    email_context={
+                        "action_url": request.build_absolute_uri(target_url),
+                        "action_label": "Review signup request",
+                        "details": [
+                            ("Registration Number", access_request.register_no),
+                            ("School", access_request.school.name),
+                            ("Department", access_request.department),
+                            ("Sports", ", ".join(sport.name for sport in form.cleaned_data["sports"])),
+                        ],
+                    },
+                )
         except IntegrityError:
             form.add_error("email", "Your details/request have already been submitted.")
         else:
@@ -157,11 +182,12 @@ def dashboard(request):
     trainer_stats = None
     completed_sessions = sessions.filter(attendance_submitted=True)[:8]
     upcoming_sessions = sessions.filter(start_at__date__gte=today)[:8]
-    male_teams = Team.objects.filter(gender=Team.TeamGender.MALE).count()
-    female_teams = Team.objects.filter(gender=Team.TeamGender.FEMALE).count()
-    student_count = student_accounts().count()
-    trainer_count = User.objects.filter(profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR]).count()
-    sport_count = Sport.objects.count()
+    active_teams = Team.objects.filter(is_active=True, sport__is_active=True)
+    male_teams = active_teams.filter(gender=Team.TeamGender.MALE).count()
+    female_teams = active_teams.filter(gender=Team.TeamGender.FEMALE).count()
+    student_count = active_accounts(student_accounts()).count()
+    trainer_count = active_accounts(User.objects.filter(profile__role__in=TRAINER_ROLES)).count()
+    sport_count = Sport.objects.filter(is_active=True).count()
     sport_stats = Sport.objects.annotate(session_count=Count("teams__sessions")).order_by("name")
     if role in TRAINER_ROLES and not is_admin_user(request.user):
         assigned_teams = trainer_assigned_teams(request.user)
@@ -172,9 +198,9 @@ def dashboard(request):
             session_count=Count("teams__sessions", filter=Q(teams__in=assigned_teams), distinct=True)
         ).distinct().order_by("name")
         trainer_stats = {
-            "sports": assigned_teams.values("sport").distinct().count(),
-            "teams": assigned_teams.count(),
-            "students": student_accounts().filter(memberships__team__in=assigned_teams, memberships__is_active=True).distinct().count(),
+            "sports": assigned_teams.filter(sport__is_active=True).values("sport").distinct().count(),
+            "teams": assigned_teams.filter(sport__is_active=True).count(),
+            "students": active_accounts(student_accounts()).filter(memberships__team__in=assigned_teams.filter(sport__is_active=True), memberships__is_active=True).distinct().count(),
             "sessions": sessions.count(),
             "completed": sessions.filter(attendance_submitted=True).count(),
             "upcoming": sessions.filter(start_at__date__gte=today, attendance_submitted=False).count(),
@@ -217,11 +243,12 @@ def dashboard(request):
 @role_required(*ADMIN_ROLES)
 def analytics(request):
     today = timezone.localdate()
-    male_teams = Team.objects.filter(gender=Team.TeamGender.MALE).count()
-    female_teams = Team.objects.filter(gender=Team.TeamGender.FEMALE).count()
-    student_count = student_accounts().count()
-    trainer_count = User.objects.filter(profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR]).count()
-    sport_count = Sport.objects.count()
+    active_teams = Team.objects.filter(is_active=True, sport__is_active=True)
+    male_teams = active_teams.filter(gender=Team.TeamGender.MALE).count()
+    female_teams = active_teams.filter(gender=Team.TeamGender.FEMALE).count()
+    student_count = active_accounts(student_accounts()).count()
+    trainer_count = active_accounts(User.objects.filter(profile__role__in=TRAINER_ROLES)).count()
+    sport_count = Sport.objects.filter(is_active=True).count()
     team_count = male_teams + female_teams
     total_attendance = AttendanceRecord.objects.count()
     attended_attendance = AttendanceRecord.objects.filter(status__in=[
@@ -234,10 +261,9 @@ def analytics(request):
     total_sessions = Session.objects.count()
     completed_sessions = Session.objects.filter(attendance_submitted=True).count()
     upcoming_sessions = Session.objects.filter(start_at__date__gte=today, attendance_submitted=False).count()
-    assigned_trainers = User.objects.filter(
-        profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR],
-        coordinated_teams__isnull=False,
-    ).distinct().count()
+    assigned_trainers = active_accounts(User.objects.filter(
+        profile__role__in=TRAINER_ROLES, coordinated_teams__in=active_teams,
+    )).distinct().count()
     trainer_rows = User.objects.filter(
         Q(profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR])
         | Q(coordinated_teams__isnull=False)
@@ -1883,14 +1909,11 @@ def sports_list(request):
             user__profile__role=UserProfile.Role.MEMBER,
         ).values_list("user_id", flat=True))
         sport.player_count = len(team_player_ids | direct_player_ids)
-    trainer_count = User.objects.filter(
-        profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR],
-        is_active=True,
-    ).count()
+    trainer_count = active_accounts(User.objects.filter(profile__role__in=TRAINER_ROLES)).count()
     return render(request, "core/sports.html", {
         "invalid_modal": invalid_modal,
         "sports": sports,
-        "sport_count": sports.count(),
+        "sport_count": sports.filter(is_active=True).count(),
         "trainer_count": trainer_count,
     })
 
@@ -1988,7 +2011,7 @@ def schools_list(request):
         if invalid_modal is None:
             return redirect("schools")
 
-    schools = list(School.objects.annotate(student_count=Count("profiles")).order_by("name"))
+    schools = list(School.objects.annotate(student_count=Count("profiles", filter=Q(profiles__user__in=active_accounts(student_accounts())))).order_by("name"))
     return render(request, "core/schools.html", {
         "invalid_modal": invalid_modal,
         "schools": schools,
@@ -2157,7 +2180,7 @@ def teams_list(request):
     teams = list(teams)
     visible_team_ids = [team.pk for team in teams]
     team_stats = {
-        "total": len(teams),
+        "total": sum(1 for team in teams if team.is_active and team.sport.is_active),
         "completed_sessions": Session.objects.filter(team_id__in=visible_team_ids, attendance_submitted=True).count(),
     }
     student_roles = [UserProfile.Role.MEMBER, UserProfile.Role.CAPTAIN, UserProfile.Role.VICE_CAPTAIN]
@@ -2320,6 +2343,8 @@ def members_list(request):
                 with transaction.atomic():
                     posted_email = request.POST.get("student_email", "").strip().lower()
                     email_user = User.objects.filter(email__iexact=posted_email).first() if posted_email else None
+                    if email_user and (action == "create" or existing_user and email_user.pk != existing_user.pk):
+                        raise ValueError(DUPLICATE_ACCOUNT_EMAIL)
                     if email_user and not student_accounts().filter(pk=email_user.pk).exists():
                         messages.error(request, "Only student accounts can be managed here.")
                         return redirect("members")
@@ -2729,7 +2754,6 @@ def trainers_list(request):
             phone = request.POST.get("mobile_number", "").strip()
             register_no = request.POST.get("register_no", "").strip()
             selected_team_ids = request.POST.getlist("teams")
-            is_new_trainer = trainer is None and not User.objects.filter(email__iexact=email).exists()
             if not email:
                 remember_modal_error(request, "trainerModal", ["Trainer email is required."])
                 return redirect("trainers")
@@ -2741,7 +2765,12 @@ def trainers_list(request):
             if phone and not re.fullmatch(r"\d{10}", phone):
                 remember_modal_error(request, "trainerModal", ["Mobile number must be exactly 10 digits."])
                 return redirect("trainers")
-            trainer = trainer or User.objects.filter(email__iexact=email).first()
+            email_user = User.objects.filter(email__iexact=email).first()
+            if email_user and (action == "create" or trainer and email_user.pk != trainer.pk):
+                remember_modal_error(request, "trainerModal", [DUPLICATE_ACCOUNT_EMAIL])
+                return redirect("trainers")
+            trainer = trainer or email_user
+            is_new_trainer = trainer is None
             previous_team_ids = set(Team.objects.filter(coordinator=trainer).values_list("pk", flat=True)) if trainer else set()
             try:
                 validate_unique_register_no(register_no, trainer)
@@ -2819,6 +2848,9 @@ def trainers_list(request):
         "total": len(trainers),
         "active": sum(1 for trainer in trainers if trainer.account_status == UserProfile.AccountStatus.ACTIVE and trainer.profile.role in [UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR]),
         "assigned_sports": Sport.objects.filter(
+            is_active=True,
+            teams__is_active=True,
+            teams__coordinator__profile__role__in=TRAINER_ROLES,
             teams__coordinator__is_active=True,
             teams__coordinator__profile__account_status=UserProfile.AccountStatus.ACTIVE,
         ).distinct().count(),
