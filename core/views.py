@@ -40,6 +40,7 @@ from .forms import (
     StudentSignupRequestForm,
     TeamForm,
     VenueForm,
+    matching_catalog_name,
 )
 from .email_validation import validate_christ_email
 from .email_notifications import queue_notification_emails
@@ -64,6 +65,13 @@ from .models import (
 from .permissions import ADMIN_ROLES, TRAINER_ROLES, can_manage_team, can_schedule_session, can_take_attendance, is_admin_user, role_for, role_required
 
 User = get_user_model()
+STUDENT_ROLES = (UserProfile.Role.MEMBER, UserProfile.Role.CAPTAIN, UserProfile.Role.VICE_CAPTAIN)
+
+
+def student_accounts():
+    return User.objects.filter(is_superuser=False, profile__role__in=STUDENT_ROLES).exclude(
+        profile__account_status=UserProfile.AccountStatus.DELETED,
+    )
 
 
 SPORT_ICON_MAP = {
@@ -151,7 +159,7 @@ def dashboard(request):
     upcoming_sessions = sessions.filter(start_at__date__gte=today)[:8]
     male_teams = Team.objects.filter(gender=Team.TeamGender.MALE).count()
     female_teams = Team.objects.filter(gender=Team.TeamGender.FEMALE).count()
-    student_count = User.objects.filter(profile__role=UserProfile.Role.MEMBER).count()
+    student_count = student_accounts().count()
     trainer_count = User.objects.filter(profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR]).count()
     sport_count = Sport.objects.count()
     sport_stats = Sport.objects.annotate(session_count=Count("teams__sessions")).order_by("name")
@@ -166,7 +174,7 @@ def dashboard(request):
         trainer_stats = {
             "sports": assigned_teams.values("sport").distinct().count(),
             "teams": assigned_teams.count(),
-            "students": User.objects.filter(memberships__team__in=assigned_teams, memberships__is_active=True).distinct().count(),
+            "students": student_accounts().filter(memberships__team__in=assigned_teams, memberships__is_active=True).distinct().count(),
             "sessions": sessions.count(),
             "completed": sessions.filter(attendance_submitted=True).count(),
             "upcoming": sessions.filter(start_at__date__gte=today, attendance_submitted=False).count(),
@@ -211,7 +219,7 @@ def analytics(request):
     today = timezone.localdate()
     male_teams = Team.objects.filter(gender=Team.TeamGender.MALE).count()
     female_teams = Team.objects.filter(gender=Team.TeamGender.FEMALE).count()
-    student_count = User.objects.filter(profile__role=UserProfile.Role.MEMBER).count()
+    student_count = student_accounts().count()
     trainer_count = User.objects.filter(profile__role__in=[UserProfile.Role.TRAINER, UserProfile.Role.COORDINATOR]).count()
     sport_count = Sport.objects.count()
     team_count = male_teams + female_teams
@@ -334,6 +342,8 @@ def can_manage_student_membership(user, membership):
 
 
 def can_view_student_user(user, student):
+    if not student_accounts().filter(pk=student.pk).exists():
+        return False
     if is_admin_user(user):
         return True
     if role_for(user) in TRAINER_ROLES:
@@ -944,6 +954,7 @@ def add_bulk_upload_messages(request, created, errors):
     if created:
         messages.success(request, f"Bulk upload completed. {created} row(s) saved.")
     if errors:
+        remember_modal_error(request, "bulkUploadModal", [*errors[:5], "Select the corrected Excel file to try again."])
         detail = " ".join(errors[:5])
         extra = f" {len(errors) - 5} more error(s)." if len(errors) > 5 else ""
         messages.error(request, f"{len(errors)} row(s) could not be uploaded. {detail}{extra}")
@@ -1383,6 +1394,11 @@ def bulk_upload_sample(request, kind):
     return response
 
 
+def catalog_display_name(queryset, name):
+    existing = matching_catalog_name(queryset, name).order_by("pk").first()
+    return existing.name if existing else name.strip()
+
+
 def import_sports_from_file(uploaded_file):
     created = 0
     errors = []
@@ -1397,7 +1413,7 @@ def import_sports_from_file(uploaded_file):
         except ValueError as exc:
             errors.append(f"Row {index}: {exc}")
             continue
-        Sport.objects.update_or_create(name=name, defaults={"description": str(row.get("description") or "").strip(), "is_active": is_active})
+        Sport.objects.update_or_create(name=catalog_display_name(Sport.objects.all(), name), defaults={"description": str(row.get("description") or "").strip(), "is_active": is_active})
         created += 1
     return created, errors
 
@@ -1417,7 +1433,7 @@ def import_venues_from_file(uploaded_file):
             errors.append(f"Row {index}: {exc}")
             continue
         Venue.objects.update_or_create(
-            name=name,
+            name=catalog_display_name(Venue.objects.all(), name),
             defaults={"location": str(row.get("location") or "").strip(), "is_active": is_active},
         )
         created += 1
@@ -1439,7 +1455,7 @@ def import_schools_from_file(uploaded_file):
             errors.append(f"Row {index}: {exc}")
             continue
         School.objects.update_or_create(
-            name=name,
+            name=catalog_display_name(School.objects.all(), name),
             defaults={"description": str(row.get("description") or "").strip(), "is_active": is_active},
         )
         created += 1
@@ -1462,7 +1478,7 @@ def import_teams_from_file(uploaded_file):
         except ValueError as exc:
             errors.append(f"Row {index}: {exc}")
             continue
-        sport = Sport.objects.filter(name__iexact=sport_name, is_active=True).first()
+        sport = matching_catalog_name(Sport.objects.filter(is_active=True), sport_name).order_by("pk").first()
         if not sport:
             errors.append(f"Row {index}: Sport '{sport_name}' was not found or is inactive.")
             continue
@@ -1481,7 +1497,7 @@ def import_teams_from_file(uploaded_file):
             continue
         captain = find_user_by_email(row.get("captain_email"))
         vice_captain = find_user_by_email(row.get("vice_captain_email"))
-        current_team = Team.objects.filter(sport=sport, name=team_name, team_type=team_type, gender=gender).first()
+        current_team = matching_catalog_name(Team.objects.filter(sport=sport, team_type=team_type, gender=gender), team_name).order_by("pk").first()
         if not is_student_leader_candidate(captain):
             errors.append(f"Row {index}: Captain must be a student, not a trainer/admin.")
             continue
@@ -1505,7 +1521,7 @@ def import_teams_from_file(uploaded_file):
             continue
         Team.objects.update_or_create(
             sport=sport,
-            name=team_name,
+            name=current_team.name if current_team else team_name,
             team_type=team_type,
             gender=gender,
             defaults={
@@ -1787,9 +1803,22 @@ def import_sessions_from_file(uploaded_file, user):
     return created, errors
 
 
+def modal_validation(request, modal_id, form):
+    values = {key: values for key, values in request.POST.lists() if key != "csrfmiddlewaretoken"}
+    return {"id": modal_id, "values": values, "errors": form.errors}
+
+
+def remember_modal_error(request, modal_id, errors):
+    values = {key: values for key, values in request.POST.lists() if key != "csrfmiddlewaretoken"}
+    request.session["modal_validation"] = {
+        "path": request.path, "id": modal_id, "values": values, "errors": {"__all__": errors},
+    }
+
+
 @login_required
 @role_required(*ADMIN_ROLES)
 def sports_list(request):
+    invalid_modal = None
     if request.method == "POST":
         action = request.POST.get("action")
         sport_id = request.POST.get("sport_id")
@@ -1810,12 +1839,13 @@ def sports_list(request):
                     )
                 messages.success(request, "Sport saved successfully.")
             else:
-                messages.error(request, "Please correct the sport details and try again.")
+                invalid_modal = modal_validation(request, "sportModal", form)
         elif action == "bulk_upload":
             try:
                 created, errors = import_sports_from_file(request.FILES.get("bulk_file"))
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action == "deactivate" and sport:
             sport.is_active = False
@@ -1829,7 +1859,8 @@ def sports_list(request):
             sport_name = sport.name
             sport.delete()
             messages.success(request, f"{sport_name} deleted.")
-        return redirect("sports")
+        if invalid_modal is None:
+            return redirect("sports")
 
     sports = Sport.objects.annotate(
         team_count=Count("teams", distinct=True),
@@ -1857,6 +1888,7 @@ def sports_list(request):
         is_active=True,
     ).count()
     return render(request, "core/sports.html", {
+        "invalid_modal": invalid_modal,
         "sports": sports,
         "sport_count": sports.count(),
         "trainer_count": trainer_count,
@@ -1866,6 +1898,7 @@ def sports_list(request):
 @login_required
 @role_required(*ADMIN_ROLES)
 def venues_list(request):
+    invalid_modal = None
     if request.method == "POST":
         action = request.POST.get("action")
         venue_id = request.POST.get("venue_id")
@@ -1883,12 +1916,13 @@ def venues_list(request):
                     )
                 messages.success(request, "Venue saved successfully.")
             else:
-                messages.error(request, "Please correct the venue details and try again.")
+                invalid_modal = modal_validation(request, "venueModal", form)
         elif action == "bulk_upload":
             try:
                 created, errors = import_venues_from_file(request.FILES.get("bulk_file"))
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action == "deactivate" and venue:
             venue.is_active = False
@@ -1902,13 +1936,15 @@ def venues_list(request):
             venue_name = venue.name
             venue.delete()
             messages.success(request, f"{venue_name} deleted.")
-        return redirect("venues")
+        if invalid_modal is None:
+            return redirect("venues")
 
     venues = list(Venue.objects.all().order_by("name"))
     for venue in venues:
         venue.session_count = Session.objects.filter(venue=venue.name).count()
         venue.completed_session_count = Session.objects.filter(venue=venue.name, attendance_submitted=True).count()
     return render(request, "core/venues.html", {
+        "invalid_modal": invalid_modal,
         "venues": venues,
         "venue_count": len(venues),
         "active_venue_count": sum(1 for venue in venues if venue.is_active),
@@ -1918,6 +1954,7 @@ def venues_list(request):
 @login_required
 @role_required(*ADMIN_ROLES)
 def schools_list(request):
+    invalid_modal = None
     if request.method == "POST":
         action = request.POST.get("action")
         school_id = request.POST.get("school_id")
@@ -1928,12 +1965,13 @@ def schools_list(request):
                 form.save()
                 messages.success(request, "School saved successfully.")
             else:
-                messages.error(request, "Please correct the school details and try again.")
+                invalid_modal = modal_validation(request, "schoolModal", form)
         elif action == "bulk_upload":
             try:
                 created, errors = import_schools_from_file(request.FILES.get("bulk_file"))
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action == "deactivate" and school:
             school.is_active = False
@@ -1947,10 +1985,12 @@ def schools_list(request):
             school_name = school.name
             school.delete()
             messages.success(request, f"{school_name} deleted.")
-        return redirect("schools")
+        if invalid_modal is None:
+            return redirect("schools")
 
     schools = list(School.objects.annotate(student_count=Count("profiles")).order_by("name"))
     return render(request, "core/schools.html", {
+        "invalid_modal": invalid_modal,
         "schools": schools,
         "school_count": len(schools),
         "active_school_count": sum(1 for school in schools if school.is_active),
@@ -1971,6 +2011,7 @@ def sport_form(request, pk=None):
 
 @login_required
 def teams_list(request):
+    invalid_modal = None
     if is_admin_user(request.user) and request.method == "POST":
         action = request.POST.get("action")
         team_id = request.POST.get("team_id")
@@ -2024,12 +2065,13 @@ def teams_list(request):
                 for field_errors in form.errors.values():
                     for error in field_errors:
                         messages.error(request, error)
-                messages.error(request, "Please correct the team details and try again.")
+                invalid_modal = modal_validation(request, "teamModal", form)
         elif action == "bulk_upload":
             try:
                 created, errors = import_teams_from_file(request.FILES.get("bulk_file"))
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action == "deactivate" and team:
             team.is_active = False
@@ -2106,7 +2148,8 @@ def teams_list(request):
             notify_team_membership_change(request.user, User.objects.filter(pk__in=activated_ids), team, "activated")
             notify_team_membership_change(request.user, User.objects.filter(pk__in=removed_ids), team, "removed")
             messages.success(request, f"Team players updated successfully. Added {added_count}, removed {removed_count}.")
-        return redirect("teams")
+        if invalid_modal is None:
+            return redirect("teams")
 
     teams = Team.objects.select_related("sport", "captain", "vice_captain", "coordinator").prefetch_related("memberships__user", "memberships__user__profile")
     if not is_admin_user(request.user):
@@ -2161,6 +2204,7 @@ def teams_list(request):
     trainer_users = User.objects.filter(is_active=True, profile__role__in=trainer_roles).order_by("first_name", "last_name", "username")
     sports = Sport.objects.filter(is_active=True).order_by("name")
     return render(request, "core/teams.html", {
+        "invalid_modal": invalid_modal,
         "teams": teams,
         "users": users,
         "trainer_users": trainer_users,
@@ -2252,6 +2296,7 @@ def members_list(request):
                 created, errors = import_students_from_file(request.FILES.get("bulk_file"), request.user)
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
             return redirect("members")
 
@@ -2263,6 +2308,9 @@ def members_list(request):
             return redirect("members")
         user_id = request.POST.get("user_id")
         existing_user = membership.user if membership else User.objects.filter(pk=user_id).first() if user_id else None
+        if existing_user and not student_accounts().filter(pk=existing_user.pk).exists():
+            messages.error(request, "Only student accounts can be managed here.")
+            return redirect("members")
         if existing_user and not is_admin_user(request.user) and not can_view_student_user(request.user, existing_user):
             messages.error(request, "You cannot manage this student.")
             return redirect("members")
@@ -2272,6 +2320,9 @@ def members_list(request):
                 with transaction.atomic():
                     posted_email = request.POST.get("student_email", "").strip().lower()
                     email_user = User.objects.filter(email__iexact=posted_email).first() if posted_email else None
+                    if email_user and not student_accounts().filter(pk=email_user.pk).exists():
+                        messages.error(request, "Only student accounts can be managed here.")
+                        return redirect("members")
                     if not is_admin_user(request.user) and email_user and not can_view_student_user(request.user, email_user):
                         if action == "update":
                             messages.error(request, "You cannot update students from another team.")
@@ -2355,7 +2406,7 @@ def members_list(request):
                         if team_id in teams_by_id
                     )
             except ValueError as exc:
-                messages.error(request, str(exc))
+                remember_modal_error(request, "memberModal", [str(exc)])
             else:
                 for changed_team, change in membership_notifications:
                     notify_team_membership_change(request.user, [student], changed_team, change)
@@ -2407,7 +2458,7 @@ def members_list(request):
             messages.success(request, f"{student_name} moved to settings restore list.")
         return redirect("members")
 
-    memberships = Membership.objects.select_related("user", "user__profile", "team", "team__sport").exclude(user__profile__account_status=UserProfile.AccountStatus.DELETED)
+    memberships = Membership.objects.filter(user__in=student_accounts()).select_related("user", "user__profile", "team", "team__sport")
     if not is_admin_user(request.user):
         if role_for(request.user) in TRAINER_ROLES:
             memberships = memberships.filter(team__in=allowed_teams)
@@ -2461,7 +2512,7 @@ def members_list(request):
             "assigned_team_type_labels": ", ".join(sorted(assigned_team_type_labels_by_user.get(user_id, set()))),
         })
     if is_admin_user(request.user):
-        unassigned_students = User.objects.filter(profile__role=UserProfile.Role.MEMBER).exclude(profile__account_status=UserProfile.AccountStatus.DELETED).exclude(pk__in=assigned_user_ids).select_related("profile").order_by("first_name", "last_name", "email")
+        unassigned_students = student_accounts().exclude(pk__in=assigned_user_ids).select_related("profile").order_by("first_name", "last_name", "email")
         for student in unassigned_students:
             account_status = user_account_status(student)
             student_rows.append({"membership": None, "user": student, "team": None, "account_status": account_status, "is_readonly": account_status == UserProfile.AccountStatus.DEACTIVATED, "is_active": account_status == UserProfile.AccountStatus.ACTIVE, "assigned_team_ids": "", "assigned_team_labels": "", "assigned_sport_ids": ",".join(sorted(assigned_sport_ids_by_user.get(student.pk, set()))), "assigned_sport_labels": ", ".join(sorted(assigned_sport_labels_by_user.get(student.pk, set()))), "assigned_team_types": "", "assigned_team_type_labels": ""})
@@ -2494,8 +2545,7 @@ def members_list(request):
 def _student_export_rows(student_ids):
     users_by_id = {
         user.pk: user
-        for user in User.objects.filter(pk__in=student_ids, profile__role=UserProfile.Role.MEMBER)
-        .exclude(profile__account_status=UserProfile.AccountStatus.DELETED)
+        for user in student_accounts().filter(pk__in=student_ids)
         .select_related("profile", "profile__school")
     }
     memberships_by_user = {}
@@ -2681,22 +2731,22 @@ def trainers_list(request):
             selected_team_ids = request.POST.getlist("teams")
             is_new_trainer = trainer is None and not User.objects.filter(email__iexact=email).exists()
             if not email:
-                messages.error(request, "Trainer email is required.")
+                remember_modal_error(request, "trainerModal", ["Trainer email is required."])
                 return redirect("trainers")
             try:
                 email = validate_christ_email(email)
             except ValueError as exc:
-                messages.error(request, str(exc))
+                remember_modal_error(request, "trainerModal", [str(exc)])
                 return redirect("trainers")
             if phone and not re.fullmatch(r"\d{10}", phone):
-                messages.error(request, "Mobile number must be exactly 10 digits.")
+                remember_modal_error(request, "trainerModal", ["Mobile number must be exactly 10 digits."])
                 return redirect("trainers")
             trainer = trainer or User.objects.filter(email__iexact=email).first()
             previous_team_ids = set(Team.objects.filter(coordinator=trainer).values_list("pk", flat=True)) if trainer else set()
             try:
                 validate_unique_register_no(register_no, trainer)
             except ValueError as exc:
-                messages.error(request, str(exc))
+                remember_modal_error(request, "trainerModal", [str(exc)])
                 return redirect("trainers")
             if trainer is None:
                 trainer = User(username=email, email=email)
@@ -2735,6 +2785,7 @@ def trainers_list(request):
                 created, errors = import_trainers_from_file(request.FILES.get("bulk_file"))
                 add_bulk_upload_messages(request, created, errors)
             except ValueError as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action == "deactivate" and trainer:
             set_user_account_status(trainer, UserProfile.AccountStatus.DEACTIVATED, status_reason)
@@ -2802,6 +2853,18 @@ def settings_page(request):
         "deleted_sessions_count": deleted_sessions.count() if can_view_deleted_sessions else 0,
         "deleted_meetings_count": deleted_meetings_count,
     })
+
+
+@login_required
+@role_required(*ADMIN_ROLES)
+def user_management(request):
+    if request.method == "POST":
+        return HttpResponse(status=405, headers={"Allow": "GET, HEAD"})
+    accounts = User.objects.select_related("profile").order_by("first_name", "last_name", "username")
+    for account in accounts:
+        account.display_status = user_account_status(account)
+        account.display_role = UserProfile.Role.SUPER_ADMIN.label if account.is_superuser else account.profile.get_role_display()
+    return render(request, "core/user_management.html", {"accounts": accounts})
 
 
 @login_required
@@ -2987,6 +3050,7 @@ def membership_form(request, pk=None):
 
 @login_required
 def sessions_list(request):
+    invalid_modal = None
     if request.method == "POST":
         action = request.POST.get("action")
         session_id = request.POST.get("session_id")
@@ -2999,6 +3063,7 @@ def sessions_list(request):
                 created, errors = import_sessions_from_file(request.FILES.get("bulk_file"), request.user)
                 add_bulk_upload_messages(request, created, errors)
             except (ValueError, TypeError) as exc:
+                remember_modal_error(request, "bulkUploadModal", [str(exc), "Select an Excel file to try again."])
                 messages.error(request, str(exc))
         elif action in {"create", "update"}:
             original_team = session.team if session else None
@@ -3041,7 +3106,7 @@ def sessions_list(request):
                 for field_errors in form.errors.values():
                     for error in field_errors:
                         messages.error(request, error)
-                messages.error(request, "Please correct the session details and try again.")
+                invalid_modal = modal_validation(request, "sessionModal", form)
         elif action in {"cancel", "delete"} and session:
             if session.attendance_submitted:
                 messages.error(request, "Completed practice sessions cannot be cancelled.")
@@ -3086,7 +3151,8 @@ def sessions_list(request):
                 session.deleted_by = request.user
                 session.save(update_fields=["is_deleted", "deleted_at", "deleted_by", "updated_at"])
                 messages.success(request, "Cancelled practice session moved to Deleted Sessions.")
-        return redirect("sessions")
+        if invalid_modal is None:
+            return redirect("sessions")
 
     filter_data = request.GET.copy() if request.GET else None
     if filter_data is not None and not filter_data.get("report_type"):
@@ -3133,6 +3199,7 @@ def sessions_list(request):
     session_list = add_session_permissions(request.user, session_page.object_list)
     venues = Venue.objects.filter(is_active=True).order_by("name")
     return render(request, "core/sessions.html", {
+        "invalid_modal": invalid_modal,
         "sessions": session_list,
         "form": form,
         "teams": team_qs,

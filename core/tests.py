@@ -39,6 +39,100 @@ from .adapters import ChristGoogleAccountAdapter
 User = get_user_model()
 
 
+class CatalogNameTests(TestCase):
+    def test_invalid_bulk_row_reopens_upload_modal(self):
+        self.client.force_login(User.objects.create_superuser("upload-admin"))
+        response = self.client.post(reverse("sports"), {
+            "action": "bulk_upload",
+            "bulk_file": self.upload([["Sport Name", "Status"], ["Cricket", "Invalid status"]]),
+        }, follow=True)
+        state = response.context["retry_modal"]
+        self.assertEqual(state["id"], "bulkUploadModal")
+        self.assertIn("Row 2:", state["errors"]["__all__"][0])
+        self.assertFalse(Sport.objects.exists())
+
+    def test_duplicate_sport_reopens_modal_with_submitted_values(self):
+        self.client.force_login(User.objects.create_superuser("catalog-admin"))
+        Sport.objects.create(name="Cricket")
+        response = self.client.post(reverse("sports"), {
+            "action": "create", "name": " cricket ", "description": "Keep this text", "is_active": "on",
+        })
+        self.assertContains(response, 'id="invalid-modal-data"')
+        self.assertEqual(response.context["invalid_modal"]["id"], "sportModal")
+        self.assertEqual(response.context["invalid_modal"]["values"]["description"], ["Keep this text"])
+        self.assertContains(response, "A sport with this name already exists.")
+        self.assertEqual(Sport.objects.count(), 1)
+
+    def upload(self, rows):
+        workbook = Workbook()
+        for row in rows:
+            workbook.active.append(row)
+        output = BytesIO()
+        workbook.save(output)
+        return SimpleUploadedFile("catalog.xlsx", output.getvalue())
+
+    def test_sport_import_reuses_case_variants_and_keeps_first_display_name(self):
+        sport = Sport.objects.create(name="Cricket")
+        count, errors = import_sports_from_file(self.upload([
+            ["Sport Name"], [" cricket "], ["CRICKET"], ["Football"], ["fooTBall"], ["FOOTball"],
+        ]))
+        self.assertEqual((count, errors), (5, []))
+        self.assertEqual(set(Sport.objects.values_list("pk", "name")), {(sport.pk, "Cricket"), (Sport.objects.get(name="Football").pk, "Football")})
+
+    def test_team_import_and_manual_forms_reject_duplicate_names_in_scope(self):
+        from .forms import SportForm, TeamForm
+
+        sport = Sport.objects.create(name="Cricket")
+        count, errors = import_teams_from_file(self.upload([
+            ["Sport", "Team Name", "Team Type", "Gender"],
+            ["Cricket", "cHrisT Cricket Team", "University", "Male"],
+            [" CRICKET ", " christ cricket TEAM ", "University", "Male"],
+            ["cricket", "christ cricket TEAM", "University", "Female"],
+        ]))
+        self.assertEqual((count, errors), (3, []))
+        self.assertEqual(Team.objects.count(), 2)
+        self.assertEqual(Team.objects.get(gender=Team.TeamGender.MALE).name, "cHrisT Cricket Team")
+        self.assertIn("name", SportForm({"name": " CRICKET "}).errors)
+        self.assertIn("name", TeamForm({
+            "sport": sport.pk, "name": "CHRIST CRICKET TEAM", "team_type": Team.TeamType.UNIVERSITY,
+            "gender": Team.TeamGender.MALE,
+        }).errors)
+
+
+class UserManagementTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser("root", "root@christuniversity.in")
+        self.student = User.objects.create_user("student", "student@christuniversity.in")
+        self.url = reverse("user_management")
+
+    def test_superuser_with_default_member_profile_is_not_a_student(self):
+        sport = Sport.objects.create(name="Cricket")
+        team = Team.objects.create(sport=sport, name="First Team", team_type=Team.TeamType.UNIVERSITY, gender=Team.TeamGender.MALE)
+        Membership.objects.create(user=self.admin, team=team)
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.get(reverse("dashboard")).context["admin_stats"]["students"], 1)
+        response = self.client.get(reverse("members"))
+        self.assertEqual([row["user"] for row in response.context["student_rows"]], [self.student])
+        self.assertContains(self.client.get(reverse("settings")), self.url)
+        self.assertContains(self.client.get(self.url), "Super Admin")
+
+    def test_regular_user_cannot_open_or_update_user_management(self):
+        self.client.force_login(self.student)
+        self.assertNotContains(self.client.get(reverse("settings")), self.url)
+        self.assertRedirects(self.client.get(self.url), reverse("dashboard"))
+        self.assertRedirects(self.client.post(self.url, {
+            "user_id": self.student.pk, "action": "role", "role": UserProfile.Role.TRAINER,
+        }), reverse("dashboard"))
+        self.student.profile.refresh_from_db()
+        self.assertEqual(self.student.profile.role, UserProfile.Role.MEMBER)
+
+    def test_user_management_is_read_only_for_admin(self):
+        self.client.force_login(self.admin)
+        self.assertEqual(self.client.post(self.url, {"user_id": self.student.pk, "action": "delete"}).status_code, 405)
+        self.student.refresh_from_db()
+        self.assertTrue(self.student.is_active)
+
+
 class LoginApprovalWorkflowTests(TestCase):
     def setUp(self):
         self.factory = RequestFactory()

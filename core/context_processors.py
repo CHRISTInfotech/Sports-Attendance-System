@@ -1,6 +1,13 @@
 from .models import Notification, Team, UserProfile
 
 
+def modal_validation(request):
+    state = request.session.get("modal_validation")
+    if request.method == "GET" and state and state["path"] == request.path:
+        return {"retry_modal": request.session.pop("modal_validation")}
+    return {}
+
+
 def breadcrumbs(request):
     match = getattr(request, "resolver_match", None)
     url_name = getattr(match, "url_name", "") if match else ""
@@ -15,6 +22,7 @@ def breadcrumbs(request):
         "schools": "Schools",
         "venues": "Venues",
         "settings": "Settings",
+        "user_management": "User Management",
         "deactivated_users": "Deleted / Inactive Users",
         "deleted_sessions": "Deleted Sessions",
         "deleted_meetings": "Deleted Meetings",
@@ -34,7 +42,7 @@ def breadcrumbs(request):
         return {}
     if url_name == "dashboard":
         return {"breadcrumb_items": []}
-    if url_name in {"notifications", "deactivated_users", "deleted_sessions", "deleted_meetings"}:
+    if url_name in {"notifications", "user_management", "deactivated_users", "deleted_sessions", "deleted_meetings"}:
         return {"breadcrumb_items": [
             {"label": "Dashboard", "url_name": "dashboard"},
             {"label": "Settings", "url_name": "settings"},

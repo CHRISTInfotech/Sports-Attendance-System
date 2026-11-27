@@ -21,6 +21,7 @@ urlpatterns = [
     path("members/<int:pk>/details/", views.member_detail, name="member_detail"),
     path("trainers/", views.trainers_list, name="trainers"),
     path("settings/", views.settings_page, name="settings"),
+    path("settings/users/", views.user_management, name="user_management"),
     path("settings/deactivated-users/", views.deactivated_users, name="deactivated_users"),
     path("settings/deleted-sessions/", views.deleted_sessions, name="deleted_sessions"),
     path("settings/deleted-sessions/<int:pk>/permanent-delete/", views.permanent_delete_session, name="permanent_delete_session"),

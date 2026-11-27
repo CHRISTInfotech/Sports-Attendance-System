@@ -1,6 +1,7 @@
 from django import forms
 from django.contrib.auth import get_user_model
 from django.db.models import Q
+from django.db.models.functions import Trim
 from django.utils import timezone
 from datetime import datetime, time
 
@@ -121,25 +122,44 @@ class StudentSignupRequestForm(BootstrapFormMixin, forms.Form):
         return value
 
 
-class SportForm(BootstrapFormMixin, forms.ModelForm):
+def matching_catalog_name(queryset, name):
+    return queryset.alias(trimmed_name=Trim("name")).filter(trimmed_name__iexact=name.strip())
+
+
+class CatalogForm(BootstrapFormMixin, forms.ModelForm):
+    def clean(self):
+        cleaned = super().clean()
+        name = cleaned.get("name")
+        queryset = self._meta.model.objects.all()
+        if self._meta.model is Team:
+            scope = {key: cleaned.get(key) for key in ("sport", "team_type", "gender")}
+            if not all(scope.values()):
+                return cleaned
+            queryset = queryset.filter(**scope)
+        if name and matching_catalog_name(queryset, name).exclude(pk=self.instance.pk).exists():
+            self.add_error("name", f"A {self._meta.model._meta.verbose_name} with this name already exists.")
+        return cleaned
+
+
+class SportForm(CatalogForm):
     class Meta:
         model = Sport
         fields = ["name", "description", "is_active"]
 
 
-class VenueForm(BootstrapFormMixin, forms.ModelForm):
+class VenueForm(CatalogForm):
     class Meta:
         model = Venue
         fields = ["name", "location", "is_active"]
 
 
-class SchoolForm(BootstrapFormMixin, forms.ModelForm):
+class SchoolForm(CatalogForm):
     class Meta:
         model = School
         fields = ["name", "description", "is_active"]
 
 
-class TeamForm(BootstrapFormMixin, forms.ModelForm):
+class TeamForm(CatalogForm):
     class Meta:
         model = Team
         fields = ["sport", "name", "team_type", "gender", "captain", "vice_captain", "coordinator", "is_active"]

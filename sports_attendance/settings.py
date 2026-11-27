@@ -95,6 +95,7 @@ TEMPLATES = [
                 'core.context_processors.role_display',
                 'core.context_processors.breadcrumbs',
                 'core.context_processors.notifications',
+                'core.context_processors.modal_validation',
             ],
         },
     },
